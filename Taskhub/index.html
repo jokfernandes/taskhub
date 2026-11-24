@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Taskhub</title>
+  <meta name="description" content="Planner de tarefas estilo repositório: projetos, tarefas, histórico e contribuições.">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Taskhub">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <script>
+    // Aplica o tema antes de pintar, para não piscar.
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('taskhub:theme'); } catch (e) {}
+      if (!t) t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+      try { var s = localStorage.getItem('taskhub:skin'); if (s) document.documentElement.dataset.skin = s; } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="overlay"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <script src="config.js"></script>
+  <script src="vendor/supabase.js"></script>
+  <script src="store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
