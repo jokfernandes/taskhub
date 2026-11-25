@@ -555,11 +555,16 @@
     let changed = false;
     for (const tpl of templates()) {
       if (tpl.recurrence.paused || !tpl.recur_next || tpl.recur_next > today) continue;
+      const until = tpl.recurrence.until || null;
       let occ = null, next = tpl.recur_next, guard = 0;
-      while (next <= today && guard++ < 800) { occ = next; next = nextOcc(tpl.recurrence, next); }
+      while (next && next <= today && guard++ < 800) {
+        if (until && next > until) { next = null; break; }
+        occ = next; next = nextOcc(tpl.recurrence, next);
+      }
+      if (until && next && next > until) next = null; // passou da data final: encerra
       const id = detUUID(`${tpl.id}:${occ}`);
       const p = getProject(tpl.project_id);
-      if (p && !getTask(id)) {
+      if (occ && p && !getTask(id)) {
         p.task_counter = (p.task_counter || 0) + 1;
         const t = baseTask(p.id, p.task_counter, tpl.title, {
           id, description: tpl.description, priority: tpl.priority, labels: [...tpl.labels],
@@ -575,7 +580,9 @@
     return changed;
   }
   function createTemplate(projectId, { title, priority, rec, start, extra }) {
-    const t = baseTask(projectId, 0, title, { priority, recurrence: rec, recur_next: alignOcc(rec, start), ...(extra || {}) });
+    let rn = alignOcc(rec, start);
+    if (rec.until && rn > rec.until) rn = null;
+    const t = baseTask(projectId, 0, title, { priority, recurrence: rec, recur_next: rn, ...(extra || {}) });
     S.tasks.push(t);
     persist('tasks', t).then(() => logActivity('recurring', `${title} (${describeRec(rec).toLowerCase()})`, projectId, t.id));
     return t;
@@ -625,6 +632,8 @@
       <span class="t-meta">
         ${t.recurrence.paused ? '<span class="pill paused">Pausada</span>' : ''}
         <span class="due">${esc(describeRec(t.recurrence))}</span>
+        ${t.recurrence.until ? `<span class="due">até ${shortDate(t.recurrence.until)}</span>` : ''}
+        ${t.recurrence.until && !t.recur_next && !t.recurrence.paused ? '<span class="pill paused">Encerrada</span>' : ''}
         ${t.recur_next && !t.recurrence.paused ? `<span class="due">${icon('calendar', 13)}${shortDate(t.recur_next)}</span>` : ''}
       </span>
     </div>`;
@@ -1285,6 +1294,10 @@
       ${rec.freq === 'daily' ? `<label class="inline">A cada <input class="input num" type="number" min="1" max="365" data-recur="interval" value="${rec.interval || 1}" aria-label="Intervalo em dias"> ${(rec.interval || 1) === 1 ? 'dia' : 'dias'}</label>` : ''}
       ${rec.freq === 'weekly' ? `<div class="wd">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<button type="button" class="${days.includes(d) ? 'on' : ''}" data-action="recur-day" data-value="${d}">${WD[d]}</button>`).join('')}</div>` : ''}
       ${rec.freq === 'monthly' ? `<div class="note" style="margin:0">Repete no mesmo dia do mês em que começar${rec.day ? ` (dia ${rec.day})` : ''}.</div>` : ''}
+      <div class="until">
+        <label class="inline">Repetir até <input class="input" type="date" data-recur="until" value="${esc(rec.until || '')}" min="${ymd(new Date())}" aria-label="Data final da repetição"></label>
+        ${rec.until ? '<button type="button" class="link-btn" data-action="recur-until-clear">Sem fim</button>' : '<small>Opcional</small>'}
+      </div>
     </div>`;
   }
   function editRec(mut) {
@@ -1302,7 +1315,9 @@
     const base = t.recur_next && t.recur_next > today ? t.recur_next : tomorrow;
     if (rec.freq === 'monthly' && !rec.day) rec.day = parseYMD(base).getDate();
     if (rec.freq === 'weekly' && !rec.days.length) rec.days = [parseYMD(base).getDay()];
-    updateTask(t, { recurrence: rec, recur_next: rec.paused ? t.recur_next : alignOcc(rec, base) });
+    let rn = rec.paused ? t.recur_next : alignOcc(rec, base);
+    if (rec.until && rn && rn > rec.until) rn = null;
+    updateTask(t, { recurrence: rec, recur_next: rn });
     refreshDrawer();
     render();
   }
@@ -1695,6 +1710,7 @@
         });
         break;
       }
+      case 'recur-until-clear': editRec((rec) => { rec.until = null; }); break;
       case 'recur-pause': editRec((rec) => { rec.paused = !rec.paused; }); break;
       case 'delete-task': {
         const t = getTask(drawerId);
@@ -1745,6 +1761,7 @@
       const rec = { ...dlgRec, days: [...(dlgRec.days || [])] };
       if (rec.freq === 'monthly') rec.day = parseYMD(start).getDate();
       if (rec.freq === 'weekly' && !rec.days.length) rec.days = [parseYMD(start).getDay()];
+      if (rec.until && rec.until < start) { toast('A data final precisa ser depois do início', 'error'); return; }
       const src = getTask(String(f.get('from') || ''));
       createTemplate(form.dataset.id, {
         title, priority: Number(f.get('priority')), rec, start,
@@ -1829,6 +1846,7 @@
     if (ds.recur) {
       if (ds.recur === 'freq') editRec((rec) => { rec.freq = el.value; if (rec.freq === 'weekly' && !(rec.days || []).length) rec.days = [new Date().getDay()]; });
       else if (ds.recur === 'interval') editRec((rec) => { rec.interval = clamp(parseInt(el.value, 10) || 1, 1, 365); });
+      else if (ds.recur === 'until') editRec((rec) => { rec.until = el.value || null; });
       return;
     }
     const t = drawerId && getTask(drawerId);
