@@ -11,7 +11,7 @@
       })
     : null;
 
-  const empty = () => ({ projects: [], tasks: [], activity: [], water_log: [], milestones: [] });
+  const empty = () => ({ projects: [], tasks: [], activity: [], water_log: [], milestones: [], finance_items: [], finance_payments: [] });
 
   const local = {
     read() {
@@ -58,14 +58,16 @@
     async load() {
       if (!sb) return local.read();
       const soft = (q) => q.then((r) => (r.error ? [] : r.data)); // tabelas novas: não derrubam o app se faltar a migração
-      const [projects, tasks, activity, water_log, milestones] = await Promise.all([
+      const [projects, tasks, activity, water_log, milestones, finance_items, finance_payments] = await Promise.all([
         sb.from('projects').select('*').order('created_at', { ascending: true }).then(check),
         sb.from('tasks').select('*').then(check),
         sb.from('activity').select('*').order('created_at', { ascending: false }).limit(500).then(check),
         soft(sb.from('water_log').select('*').order('day', { ascending: false }).limit(60)),
-        soft(sb.from('milestones').select('*').order('created_at', { ascending: true }))
+        soft(sb.from('milestones').select('*').order('created_at', { ascending: true })),
+        soft(sb.from('finance_items').select('*').order('created_at', { ascending: true })),
+        soft(sb.from('finance_payments').select('*'))
       ]);
-      return { projects, tasks, activity, water_log, milestones };
+      return { projects, tasks, activity, water_log, milestones, finance_items, finance_payments };
     },
 
     async save(table, row) {
@@ -90,6 +92,7 @@
           data.activity = data.activity.filter((a) => a.project_id !== id);
           data.milestones = data.milestones.filter((m) => m.project_id !== id);
         }
+        if (table === 'finance_items') data.finance_payments = data.finance_payments.filter((x) => x.item_id !== id);
         if (table === 'milestones') data.tasks.forEach((t) => { if (t.milestone_id === id) t.milestone_id = null; });
         local.write(data);
         return;
@@ -107,7 +110,9 @@
           tasks: state.tasks,
           activity: state.activity,
           water_log: state.water,
-          milestones: state.milestones
+          milestones: state.milestones,
+          finance_items: state.finItems,
+          finance_payments: state.finPays
         },
         null,
         2

@@ -81,6 +81,9 @@
     copy: '<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8"/>',
     droplet: '<path d="M12 3.5c3.2 4 6 6.8 6 10.2a6 6 0 0 1-12 0c0-3.4 2.8-6.2 6-10.2z"/>',
     more: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/>',
+    wallet: '<path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h11a2 2 0 0 1 2 2v1.5M3.5 7.5V17a2.5 2.5 0 0 0 2.5 2.5h12a2 2 0 0 0 2-2v-8a1 1 0 0 0-1-1H6a2.5 2.5 0 0 1-2.5-1z"/><path d="M16 14h.01" stroke-width="3"/>',
+    card: '<rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M3 10h18M7 15h3"/>',
+    chevL: '<path d="m15 6-6 6 6 6"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
   };
   const icon = (n, s = 18) =>
@@ -115,7 +118,7 @@
 
   /* ---------- estado ---------- */
   const S = {
-    projects: [], tasks: [], activity: [], milestones: [], water: [], user: null, loading: true,
+    projects: [], tasks: [], activity: [], milestones: [], water: [], finItems: [], finPays: [], finMonth: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })(), user: null, loading: true,
     heatDay: null, justDone: null, waterEdit: false, heatFull: false, filtersOpen: false, boardTab: 'todo',
     sort: (() => { try { const v = localStorage.getItem('taskhub:sort'); return SORTS[v] ? v : 'priority'; } catch (e) { return 'priority'; } })(),
     route: { view: 'home' },
@@ -158,6 +161,8 @@
     S.projects = data.projects || [];
     S.milestones = data.milestones || [];
     S.water = data.water_log || [];
+    S.finItems = (data.finance_items || []).map((i) => ({ ...i, amount: Number(i.amount) || 0 }));
+    S.finPays = data.finance_payments || [];
     S.tasks = (data.tasks || []).map((t) => ({
       labels: [], checklist: [], time_spent: 0, timer_started_at: null, recurrence: null, recur_next: null, recur_source: null,
       ...t,
@@ -479,7 +484,7 @@
     let d;
     try { d = JSON.parse(await file.text()); } catch (e) { toast('Arquivo inválido.', 'error'); return; }
     const pick = (k) => (Array.isArray(d[k]) ? d[k].filter((r) => r && r.id).map((r) => { const { user_id, ...row } = r; return row; }) : []);
-    const set = { projects: pick('projects'), milestones: pick('milestones'), tasks: pick('tasks'), activity: pick('activity'), water_log: pick('water_log') };
+    const set = { projects: pick('projects'), milestones: pick('milestones'), tasks: pick('tasks'), activity: pick('activity'), water_log: pick('water_log'), finance_items: pick('finance_items'), finance_payments: pick('finance_payments') };
     if (!Object.values(set).some((a) => a.length)) { toast('Nenhum dado encontrado no arquivo.', 'error'); return; }
     if (!confirm(`Importar ${set.projects.length} projetos e ${set.tasks.length} tarefas? Itens com o mesmo id são atualizados; nada é apagado.`)) return;
     for (const table of Object.keys(set)) {
@@ -985,6 +990,7 @@
       <nav>
         <a class="nav-item ${v === 'home' ? 'active' : ''}" href="#/"><span class="nav-ico">${icon('home')}</span><span class="grow">Visão geral</span></a>
         <a class="nav-item ${v === 'pomodoro' ? 'active' : ''}" href="#/pomodoro"><span class="nav-ico">${icon('timer')}</span><span class="grow">Pomodoro</span>${PM.running ? '<span class="count" aria-label="em andamento">●</span>' : ''}</a>
+        <a class="nav-item ${v === 'finance' ? 'active' : ''}" href="#/financas"><span class="nav-ico">${icon('wallet')}</span><span class="grow">Finanças</span></a>
         <a class="nav-item ${v === 'review' ? 'active' : ''}" href="#/revisao"><span class="nav-ico">${icon('listcheck')}</span><span class="grow">Revisão semanal</span></a>
         <div class="nav-title"><span>Projetos</span><button class="icon-btn sm" data-action="new-project" aria-label="Novo projeto">${icon('plus', 16)}</button></div>
         ${S.projects.length
@@ -1187,7 +1193,7 @@
       <a class="tab${cur(v === 'home')}" href="#/">${icon('home', 22)}<span>Início</span></a>
       <button class="tab${cur(v === 'project')}" data-action="tab-sheet" data-value="projects">${icon('folder', 22)}<span>Projetos</span></button>
       <a class="tab${cur(v === 'pomodoro')}" href="#/pomodoro">${icon('timer', 22)}<span>Pomodoro</span></a>
-      <button class="tab${cur(v === 'review')}" data-action="tab-sheet" data-value="more">${icon('more', 22)}<span>Mais</span></button>
+      <button class="tab${cur(v === 'review' || v === 'finance')}" data-action="tab-sheet" data-value="more">${icon('more', 22)}<span>Mais</span></button>
     </nav>`;
   }
   function sheet(kind) {
@@ -1196,7 +1202,8 @@
     const body = kind === 'projects'
       ? `${S.projects.map((p) => `<a class="nav-item" href="#/p/${p.id}" data-action="close-overlay"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id)}</span></a>`).join('') || '<div class="nav-empty">Nenhum projeto ainda.</div>'}
         <button type="button" class="nav-item" data-action="new-project">${icon('plus')}<span class="grow">Novo projeto</span></button>`
-      : `<a class="nav-item" href="#/revisao" data-action="close-overlay">${icon('listcheck')}<span class="grow">Revisão semanal</span></a>
+      : `<a class="nav-item" href="#/financas" data-action="close-overlay">${icon('wallet')}<span class="grow">Finanças</span></a>
+        <a class="nav-item" href="#/revisao" data-action="close-overlay">${icon('listcheck')}<span class="grow">Revisão semanal</span></a>
         <button type="button" class="nav-item" data-action="appearance">${icon('palette')}<span class="grow">Aparência</span></button>
         <button type="button" class="nav-item" data-action="export">${icon('download')}<span class="grow">Exportar backup</span></button>
         <button type="button" class="nav-item" data-action="import">${icon('download')}<span class="grow">Importar backup</span></button>
@@ -1263,6 +1270,7 @@
     }
     if (S.route.view === 'pomodoro') { view = pomoFull ? pomoFullView() : pomodoroView(); title = 'Pomodoro'; }
     if (S.route.view === 'review') { view = reviewView(); title = 'Revisão semanal'; }
+    if (S.route.view === 'finance') { view = financeView(); title = 'Finanças'; }
     if (S.route.view === 'home') view = homeView();
     baseTitle = title === APP_NAME ? APP_NAME : `${title} · ${APP_NAME}`;
     setDocTitle(baseTitle);
@@ -1662,6 +1670,27 @@
         if (t) { updateTask(t, { due_date: day }); render(); refreshDrawer(); }
         break;
       }
+      case 'fin-month': S.finMonth = addMonths(S.finMonth, parseInt(el.dataset.value, 10) || 0); render(); break;
+      case 'fin-new-sheet': finKindSheet(); break;
+      case 'fin-new': finDialog(el.dataset.value, null); break;
+      case 'fin-edit': { const it = finItem(el.dataset.id); if (it) finDialog(null, it); break; }
+      case 'fin-pay': finPayDialog(el.dataset.id); break;
+      case 'fin-toggle': finToggle(el.dataset.id); break;
+      case 'fin-end': {
+        const it = finItem(el.dataset.id);
+        if (it && it.start_month) { finSave({ ...it, installments: Math.max(1, monthIdx(S.finMonth) - monthIdx(it.start_month) + 1) }); closeOverlay(); render(); toast('Encerrado a partir do próximo mês'); }
+        break;
+      }
+      case 'fin-delete': {
+        const it = finItem(el.dataset.id);
+        if (!it) break;
+        if (!confirm(`Excluir "${it.name}" e todo o histórico dele?`)) break;
+        S.finItems = S.finItems.filter((x) => x.id !== it.id);
+        S.finPays = S.finPays.filter((x) => x.item_id !== it.id);
+        removeRow('finance_items', it.id);
+        closeOverlay(); render(); toast('Excluído');
+        break;
+      }
       case 'water-edit': S.waterEdit = !S.waterEdit; render(); break;
       case 'heat-more': S.heatFull = !S.heatFull; render(); break;
       case 'toggle-filters': { S.filtersOpen = !S.filtersOpen; const tl = document.querySelector('.tools'); if (tl) tl.classList.toggle('open', S.filtersOpen); el.setAttribute('aria-expanded', String(S.filtersOpen)); break; }
@@ -1771,6 +1800,13 @@
       closeOverlay();
       render();
       toast('Recorrência criada');
+    } else if (kind === 'finance') {
+      finSubmit(form);
+    } else if (kind === 'finpay') {
+      const it = finItem(form.dataset.id), v = parseMoney(new FormData(form).get('amount'));
+      if (!it || v == null) { toast('Informe um valor válido', 'error'); return; }
+      finSetPay(it, S.finMonth, { amount: v });
+      closeOverlay(); render();
     } else if (kind === 'milestone') {
       const f = new FormData(form);
       const title = String(f.get('title')).trim();
@@ -2055,6 +2091,224 @@
   }
   setInterval(tick, 1000);
 
+  /* ---------- finanças ---------- */
+  const FIN = {
+    account: { label: 'Conta bancária', plural: 'Contas bancárias', ico: 'wallet', col: 'var(--text-2)' },
+    bill: { label: 'Conta a pagar', plural: 'Contas', ico: 'repeat', col: 'var(--fin-1)' },
+    card: { label: 'Cartão', plural: 'Cartões', ico: 'card', col: 'var(--fin-2)' },
+    debt: { label: 'Dívida', plural: 'Dívidas', ico: 'listcheck', col: 'var(--fin-3)' },
+    receivable: { label: 'A receber', plural: 'A receber', ico: 'download', col: 'var(--fin-4)' }
+  };
+  const OUT_KINDS = ['bill', 'card', 'debt'];
+  const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+  const money = (n) => BRL.format(Number(n) || 0);
+  const moneyShort = (n) => (n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(Math.round(n)));
+  function parseMoney(v) {
+    let s = String(v == null ? '' : v).replace(/[^\d.,-]/g, '');
+    if (!s) return null;
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+  }
+  const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const monthIdx = (k) => { const [y, m] = k.split('-').map(Number); return y * 12 + (m - 1); };
+  const addMonths = (k, n) => { const i = monthIdx(k) + n; return `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`; };
+  const monthLabel = (k, short) => {
+    const [y, m] = k.split('-').map(Number);
+    const n = new Date(y, m - 1, 1).toLocaleDateString('pt-BR', { month: short ? 'short' : 'long', year: short ? undefined : 'numeric' }).replace('.', '');
+    return n;
+  };
+  const finItem = (id) => S.finItems.find((i) => i.id === id);
+  const finPay = (id, m) => S.finPays.find((p) => p.item_id === id && p.month === m);
+
+  // Ocorrência do item no mês (ou null): número da parcela e dia de vencimento.
+  function finOcc(it, m) {
+    if (it.kind === 'account' || !it.start_month) return null;
+    const k = monthIdx(m) - monthIdx(it.start_month);
+    if (k < 0 || (it.installments && k >= it.installments)) return null;
+    const [y, mo] = m.split('-').map(Number);
+    const last = new Date(y, mo, 0).getDate();
+    return { n: k + 1, day: clamp(it.due_day || 1, 1, last) };
+  }
+  function finEntries(m) {
+    const out = [];
+    S.finItems.forEach((it) => {
+      const o = finOcc(it, m);
+      if (!o) return;
+      const pay = finPay(it.id, m);
+      const hasAmt = pay && pay.amount != null;
+      const amount = hasAmt ? Number(pay.amount) : Number(it.amount) || 0;
+      out.push({ it, pay, n: o.n, day: o.day, amount, paid: !!(pay && pay.paid), unset: it.kind === 'card' && !hasAmt && !(Number(it.amount) > 0) });
+    });
+    return out.sort((a, b) => a.day - b.day || a.it.name.localeCompare(b.it.name));
+  }
+  function finTotals(es) {
+    const T = { byKind: { bill: 0, card: 0, debt: 0 }, out: 0, paidOut: 0, inn: 0, gotIn: 0 };
+    es.forEach((e) => {
+      if (e.it.kind === 'receivable') { T.inn += e.amount; if (e.paid) T.gotIn += e.amount; }
+      else { T.byKind[e.it.kind] += e.amount; T.out += e.amount; if (e.paid) T.paidOut += e.amount; }
+    });
+    return T;
+  }
+  function finSave(it) { const i = S.finItems.findIndex((x) => x.id === it.id); if (i >= 0) S.finItems[i] = it; else S.finItems.push(it); persist('finance_items', it); }
+  function finSetPay(it, m, patch) {
+    let p = finPay(it.id, m);
+    if (!p) { p = { id: detUUID(`fin:${it.id}:${m}`), item_id: it.id, month: m, amount: null, paid: false, paid_at: null }; S.finPays.push(p); }
+    Object.assign(p, patch);
+    persist('finance_payments', p);
+  }
+  function finToggle(id) {
+    const it = finItem(id), m = S.finMonth;
+    if (!it) return;
+    const p = finPay(id, m), paid = !(p && p.paid);
+    finSetPay(it, m, { paid, paid_at: paid ? nowISO() : null });
+    if (paid && navigator.vibrate) { try { navigator.vibrate(10); } catch (e) {} }
+    render();
+  }
+
+  function finChartMonth(T) {
+    const segs = OUT_KINDS.filter((k) => T.byKind[k] > 0);
+    if (!T.out) return '<div class="empty sm"><p>Sem gastos neste mês.</p></div>';
+    return `<div class="fin-bar" role="img" aria-label="Gastos do mês por tipo: ${segs.map((k) => `${FIN[k].plural} ${money(T.byKind[k])}`).join(', ')}">${segs.map((k) => `<i style="flex:${T.byKind[k]};background:${FIN[k].col}" title="${FIN[k].plural}: ${money(T.byKind[k])}"></i>`).join('')}</div>
+      <ul class="fin-legend">${OUT_KINDS.map((k) => `<li><span class="sw" style="background:${FIN[k].col}"></span><span class="grow">${FIN[k].plural}</span><b>${money(T.byKind[k])}</b><small>${T.out ? Math.round((T.byKind[k] / T.out) * 100) : 0}%</small></li>`).join('')}</ul>`;
+  }
+  function finChartYear() {
+    const months = [-1, 0, 1, 2, 3, 4].map((d) => addMonths(S.finMonth, d));
+    const data = months.map((m) => { const T = finTotals(finEntries(m)); return { m, T }; });
+    const max = Math.max(1, ...data.map((d) => Math.max(d.T.out, d.T.inn)));
+    const W = 560, H = 200, top = 22, bot = 28, pl = 8, bw = 44, step = (W - pl * 2) / data.length;
+    const y = (v) => top + (H - top - bot) * (1 - v / max);
+    let g = '';
+    data.forEach((d, i) => {
+      const x = pl + step * i + (step - bw) / 2;
+      let acc = 0;
+      OUT_KINDS.forEach((k) => {
+        const v = d.T.byKind[k];
+        if (!v) return;
+        const y1 = y(acc + v), y0 = y(acc);
+        const h = Math.max(0, y0 - y1 - 2);
+        if (h > 0) g += `<rect x="${x.toFixed(1)}" y="${(y1).toFixed(1)}" width="${bw}" height="${h.toFixed(1)}" rx="4" fill="${FIN[k].col}"><title>${monthLabel(d.m, true)} · ${FIN[k].plural}: ${money(v)}</title></rect>`;
+        acc += v;
+      });
+      if (d.T.inn) g += `<path d="M${(x - 6).toFixed(1)} ${y(d.T.inn).toFixed(1)}h${bw + 12}" stroke="var(--text)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 5"><title>${monthLabel(d.m, true)} · A receber: ${money(d.T.inn)}</title></path>`;
+      const sel = d.m === S.finMonth;
+      g += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="fin-ax ${sel ? 'on' : ''}">${esc(monthLabel(d.m, true))}</text>`;
+      if (d.T.out) g += `<text x="${(x + bw / 2).toFixed(1)}" y="${(y(d.T.out) - 6).toFixed(1)}" text-anchor="middle" class="fin-val ${sel ? 'on' : ''}">${moneyShort(d.T.out)}</text>`;
+    });
+    const base = `<path d="M${pl} ${H - bot}H${W - pl}" class="fin-base"/>`;
+    const sr = `<table class="sr-only"><caption>Gastos e valores a receber por mês</caption><tr><th>Mês</th><th>Gastos</th><th>A receber</th></tr>${data.map((d) => `<tr><td>${monthLabel(d.m)}</td><td>${money(d.T.out)}</td><td>${money(d.T.inn)}</td></tr>`).join('')}</table>`;
+    return `<svg class="fin-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gastos por mês, de ${monthLabel(data[0].m)} a ${monthLabel(data[5].m)}">${base}${g}</svg>${sr}
+      <ul class="fin-legend inline">${OUT_KINDS.map((k) => `<li><span class="sw" style="background:${FIN[k].col}"></span>${FIN[k].plural}</li>`).join('')}<li><span class="tick"></span>A receber</li></ul>`;
+  }
+
+  function finRow(e) {
+    const { it } = e, k = FIN[it.kind], isIn = it.kind === 'receivable';
+    const cur = monthKey(new Date()), today = new Date().getDate();
+    const late = !e.paid && (S.finMonth < cur || (S.finMonth === cur && e.day < today));
+    const meta = [`dia ${e.day}`, it.kind === 'debt' && it.installments ? `parcela ${e.n}/${it.installments}` : '', e.paid ? (isIn ? 'Recebido' : 'Pago') : late ? 'Atrasado' : (S.finMonth === cur && e.day === today ? 'Vence hoje' : '')].filter(Boolean);
+    return `<div class="fin-row ${e.paid ? 'paid' : ''}">
+      <button type="button" class="fin-chk" data-action="fin-toggle" data-id="${it.id}" aria-pressed="${e.paid}" aria-label="${isIn ? 'Marcar como recebido' : 'Marcar como pago'}: ${esc(it.name)}">${e.paid ? icon('check', 16) : ''}</button>
+      <button type="button" class="fin-main" data-action="fin-pay" data-id="${it.id}">
+        <span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span>
+        <span class="fin-txt"><b>${esc(it.name)}</b><small class="${late ? 'late' : ''}">${esc(k.label)} · ${meta.join(' · ')}</small></span>
+        <span class="fin-amt ${isIn ? 'in' : ''}">${e.unset ? '<em>Informar valor</em>' : `${isIn ? '+' : ''}${money(e.amount)}`}</span>
+      </button></div>`;
+  }
+  function financeView() {
+    const m = S.finMonth, es = finEntries(m), T = finTotals(es);
+    const saldo = S.finItems.filter((i) => i.kind === 'account').reduce((n, i) => n + (Number(i.amount) || 0), 0);
+    const toPay = T.out - T.paidOut, toGet = T.inn - T.gotIn;
+    const pct = T.out ? Math.round((T.paidOut / T.out) * 100) : 0;
+    const outs = es.filter((e) => e.it.kind !== 'receivable'), ins = es.filter((e) => e.it.kind === 'receivable');
+    const accts = S.finItems.filter((i) => i.kind === 'account');
+    const card = (cls, label, val, sub) => `<div class="fin-card ${cls}" role="listitem"><span>${label}</span><b>${val}</b><small>${sub}</small></div>`;
+    return `<div class="page-head"><div><h1>Finanças</h1><p class="sub">Contas, cartões, dívidas e o que você tem a receber.</p></div>
+        <div class="fin-month"><button type="button" class="icon-btn" data-action="fin-month" data-value="-1" aria-label="Mês anterior">${icon('chevL', 18)}</button><span class="fin-mlabel" aria-live="polite">${esc(monthLabel(m))}</span><button type="button" class="icon-btn" data-action="fin-month" data-value="1" aria-label="Próximo mês">${icon('chev', 18)}</button></div></div>
+      <div class="fin-sum" role="list">
+        ${card('hero', 'A pagar no mês', money(toPay), `${pct}% pago de ${money(T.out)}`)}
+        ${card('', 'A receber', money(toGet), `de ${money(T.inn)} no mês`)}
+        ${card('', 'Saldo em contas', money(saldo), plural(accts.length, 'conta', 'contas'))}
+        ${card('', 'Previsto no fim do mês', money(saldo + toGet - toPay), 'saldo + a receber − a pagar')}
+      </div>
+      <div class="fin-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Contas pagas no mês"><i style="width:${pct}%"></i></div>
+      <div class="grid-2 fin-charts">
+        <section class="card"><h2>Gastos do mês <small>${money(T.out)}</small></h2>${finChartMonth(T)}</section>
+        <section class="card"><h2>Próximos meses <small>gastos</small></h2>${finChartYear()}</section>
+      </div>
+      <div class="section-title"><span>Contas do mês</span><button type="button" class="btn primary sm" data-action="fin-new-sheet">${icon('plus', 16)}Adicionar</button></div>
+      ${outs.length ? `<div class="fin-list">${outs.map(finRow).join('')}</div>` : '<div class="card empty sm"><p>Nada a pagar neste mês. Use "Adicionar" para cadastrar contas, cartões ou dívidas.</p></div>'}
+      <div class="section-title"><span>A receber</span></div>
+      ${ins.length ? `<div class="fin-list">${ins.map(finRow).join('')}</div>` : '<div class="card empty sm"><p>Nenhum valor a receber neste mês.</p></div>'}
+      <div class="section-title"><span>Contas bancárias</span></div>
+      ${accts.length ? `<div class="fin-accts">${accts.map((a) => `<button type="button" class="fin-acct" data-action="fin-edit" data-id="${a.id}"><span class="fin-ico" style="--c:var(--text-2)">${icon('wallet', 16)}</span><span class="fin-txt"><b>${esc(a.name)}</b><small>Saldo</small></span><span class="fin-amt">${money(a.amount)}</span></button>`).join('')}</div>` : '<div class="card empty sm"><p>Cadastre suas contas para ver o saldo previsto.</p></div>'}`;
+  }
+
+  function finKindSheet() {
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="O que adicionar">
+      <div class="sheet-title">O que adicionar?</div>
+      ${['bill', 'card', 'debt', 'receivable', 'account'].map((k) => `<button type="button" class="nav-item" data-action="fin-new" data-value="${k}"><span class="nav-ico">${icon(FIN[k].ico)}</span><span class="grow">${FIN[k].label}</span></button>`).join('')}</div></div>`;
+  }
+  function finDialog(kind, it) {
+    const k = it ? it.kind : kind, acc = k === 'account';
+    const dueLbl = k === 'receivable' ? 'Dia do recebimento' : 'Dia do vencimento';
+    const hint = { bill: 'Valor fixo que se repete todo mês.', card: 'Valor habitual é opcional: você informa o valor da fatura em cada mês.', debt: 'Informe o valor da parcela e quantas parcelas faltam desde o mês inicial.', receivable: 'Para valor único, use 1 mês. Vazio = todo mês.', account: 'O saldo é atualizado por você, quando quiser.' }[k];
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="${it ? 'Editar' : 'Novo'}: ${FIN[k].label}">
+      <h2>${it ? 'Editar' : 'Novo'}: ${FIN[k].label.toLowerCase()}</h2>
+      <form data-form="finance" data-id="${it ? it.id : ''}" data-kind="${k}">
+        <div class="field"><label for="fn-name">Nome</label><input class="input" id="fn-name" name="name" value="${esc(it ? it.name : '')}" placeholder="${{ bill: 'Ex.: Internet', card: 'Ex.: Nubank', debt: 'Ex.: Financiamento', receivable: 'Ex.: Cliente Duo', account: 'Ex.: Conta corrente' }[k]}" required maxlength="60"></div>
+        <div class="split">
+          <div class="field"><label for="fn-amt">${acc ? 'Saldo (R$)' : k === 'card' ? 'Valor habitual (R$)' : k === 'debt' ? 'Valor da parcela (R$)' : 'Valor (R$)'}</label><input class="input" id="fn-amt" name="amount" inputmode="decimal" value="${it && it.amount ? String(it.amount).replace('.', ',') : ''}" placeholder="0,00" ${k === 'card' || acc ? '' : 'required'}></div>
+          ${acc ? '' : `<div class="field"><label for="fn-day">${dueLbl}</label><input class="input" id="fn-day" name="due_day" type="number" min="1" max="31" value="${it && it.due_day ? it.due_day : new Date().getDate()}" required></div>`}
+        </div>
+        ${acc ? '' : `<div class="split">
+          <div class="field"><label for="fn-start">Começa em</label><input class="input" id="fn-start" name="start_month" type="month" value="${esc(it && it.start_month ? it.start_month : S.finMonth)}" required></div>
+          <div class="field"><label for="fn-inst">${k === 'debt' ? 'Parcelas' : 'Repete por (meses)'}</label><input class="input" id="fn-inst" name="installments" type="number" min="1" max="600" value="${it && it.installments ? it.installments : (k === 'debt' ? 12 : '')}" placeholder="Sem fim" ${k === 'debt' ? 'required' : ''}></div>
+        </div>`}
+        <div class="note">${hint}</div>
+        <div class="acts">${it ? `<div class="r">${acc ? '' : '<button type="button" class="btn ghost" data-action="fin-end" data-id="' + it.id + '">Encerrar neste mês</button>'}<button type="button" class="btn danger ghost" data-action="fin-delete" data-id="${it.id}">Excluir</button></div>` : '<span></span>'}
+          <div class="r"><button type="button" class="btn" data-action="close-overlay">Cancelar</button><button class="btn primary" type="submit">${it ? 'Salvar' : 'Adicionar'}</button></div></div>
+      </form></div></div>`;
+    setTimeout(() => { const i = document.getElementById('fn-name'); if (i) i.focus(); }, 30);
+  }
+  function finPayDialog(id) {
+    const it = finItem(id);
+    if (!it) return;
+    if (it.kind === 'account') { finDialog(null, it); return; }
+    const m = S.finMonth, e = finEntries(m).find((x) => x.it.id === id);
+    if (!e) return;
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="Valor de ${esc(monthLabel(m))}">
+      <h2>${esc(it.name)}</h2>
+      <form data-form="finpay" data-id="${it.id}">
+        <div class="field"><label for="fp-amt">Valor de ${esc(monthLabel(m))} (R$)</label><input class="input" id="fp-amt" name="amount" inputmode="decimal" value="${e.unset ? '' : String(e.amount).replace('.', ',')}" placeholder="0,00" required></div>
+        <div class="note">Vale só para este mês. Para mudar o valor de todos os meses, edite o cadastro.</div>
+        <div class="acts"><button type="button" class="btn ghost" data-action="fin-edit" data-id="${it.id}">Editar cadastro</button>
+          <div class="r"><button type="button" class="btn" data-action="close-overlay">Cancelar</button><button class="btn primary" type="submit">Salvar</button></div></div>
+      </form></div></div>`;
+    setTimeout(() => { const i = document.getElementById('fp-amt'); if (i) { i.focus(); i.select(); } }, 30);
+  }
+  function finSubmit(form) {
+    const f = new FormData(form), k = form.dataset.kind, old = finItem(form.dataset.id);
+    const name = String(f.get('name')).trim();
+    if (!name) return;
+    const amount = parseMoney(f.get('amount'));
+    if (amount == null && k !== 'card' && k !== 'account') { toast('Informe um valor válido', 'error'); return; }
+    const inst = parseInt(f.get('installments'), 10);
+    const row = {
+      ...(old || { id: uid(), created_at: nowISO(), note: '' }),
+      kind: k, name, amount: amount || 0,
+      due_day: k === 'account' ? null : clamp(parseInt(f.get('due_day'), 10) || 1, 1, 31),
+      start_month: k === 'account' ? null : String(f.get('start_month') || S.finMonth),
+      installments: k === 'account' || !(inst > 0) ? null : clamp(inst, 1, 600)
+    };
+    finSave(row);
+    closeOverlay();
+    render();
+    toast(old ? 'Alterações salvas' : 'Adicionado');
+  }
+
   /* ---------- rotas e sincronização ---------- */
   function openPending() {
     if (!pendingNew || S.loading || (Store.mode === 'cloud' && !S.user)) return;
@@ -2067,6 +2321,7 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/');
     if (parts[0] === 'pomodoro') return { view: 'pomodoro' };
     if (parts[0] === 'revisao') return { view: 'review' };
+    if (parts[0] === 'financas') return { view: 'finance' };
     if (parts[0] === 'nova') { pendingNew = true; return { view: 'home' }; }
     if (parts[0] === 'p' && parts[1]) return { view: 'project', id: parts[1], tab: ['board', 'activity'].includes(parts[2]) ? parts[2] : 'list' };
     return { view: 'home' };

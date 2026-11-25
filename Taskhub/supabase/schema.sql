@@ -65,6 +65,31 @@ create table if not exists public.water_log (
   goal integer not null default 8
 );
 
+create table if not exists public.finance_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  kind text not null default 'bill',
+  name text not null default '',
+  amount numeric(14,2) not null default 0,
+  due_day integer,
+  start_month text,
+  installments integer,
+  note text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.finance_payments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item_id uuid not null references public.finance_items(id) on delete cascade,
+  month text not null,
+  amount numeric(14,2),
+  paid boolean not null default false,
+  paid_at timestamptz,
+  unique (item_id, month)
+);
+
+create index if not exists finance_payments_item_idx on public.finance_payments (item_id);
 create index if not exists tasks_project_idx on public.tasks (project_id);
 create index if not exists activity_project_idx on public.activity (project_id);
 create index if not exists milestones_project_idx on public.milestones (project_id);
@@ -73,7 +98,7 @@ create index if not exists milestones_project_idx on public.milestones (project_
 do $$
 declare t text;
 begin
-  foreach t in array array['projects','tasks','milestones','activity','water_log'] loop
+  foreach t in array array['projects','tasks','milestones','activity','water_log','finance_items','finance_payments'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "%s_own" on public.%I', t, t);
     execute format(

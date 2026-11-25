@@ -1,5 +1,5 @@
 // Service worker: rede primeiro, cache como reserva (o app abre mesmo sem internet).
-const CACHE = 'taskhub-v13';
+const CACHE = 'taskhub-v14';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './store.js', './config.js', './vendor/supabase.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
