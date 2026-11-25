@@ -83,6 +83,7 @@
     more: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/>',
     wallet: '<path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h11a2 2 0 0 1 2 2v1.5M3.5 7.5V17a2.5 2.5 0 0 0 2.5 2.5h12a2 2 0 0 0 2-2v-8a1 1 0 0 0-1-1H6a2.5 2.5 0 0 1-2.5-1z"/><path d="M16 14h.01" stroke-width="3"/>',
     card: '<rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M3 10h18M7 15h3"/>',
+    coin: '<circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.6-.7-1.5-1-2.5-1-1.4 0-2.5.7-2.5 1.8 0 2.3 5 1.1 5 3.4 0 1.1-1.1 1.8-2.5 1.8-1.1 0-2-.4-2.6-1.1M12 6.5v1.7M12 15.8v1.7"/>',
     chevL: '<path d="m15 6-6 6 6 6"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
   };
@@ -1192,8 +1193,8 @@
     return `<nav class="tabbar" aria-label="Navegação principal">
       <a class="tab${cur(v === 'home')}" href="#/">${icon('home', 22)}<span>Início</span></a>
       <button class="tab${cur(v === 'project')}" data-action="tab-sheet" data-value="projects">${icon('folder', 22)}<span>Projetos</span></button>
-      <a class="tab${cur(v === 'pomodoro')}" href="#/pomodoro">${icon('timer', 22)}<span>Pomodoro</span></a>
-      <button class="tab${cur(v === 'review' || v === 'finance')}" data-action="tab-sheet" data-value="more">${icon('more', 22)}<span>Mais</span></button>
+      <a class="tab${cur(v === 'finance')}" href="#/financas">${icon('wallet', 22)}<span>Finanças</span></a>
+      <button class="tab${cur(v === 'review' || v === 'pomodoro')}" data-action="tab-sheet" data-value="more">${icon('more', 22)}<span>Mais</span></button>
     </nav>`;
   }
   function sheet(kind) {
@@ -1202,7 +1203,7 @@
     const body = kind === 'projects'
       ? `${S.projects.map((p) => `<a class="nav-item" href="#/p/${p.id}" data-action="close-overlay"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id)}</span></a>`).join('') || '<div class="nav-empty">Nenhum projeto ainda.</div>'}
         <button type="button" class="nav-item" data-action="new-project">${icon('plus')}<span class="grow">Novo projeto</span></button>`
-      : `<a class="nav-item" href="#/financas" data-action="close-overlay">${icon('wallet')}<span class="grow">Finanças</span></a>
+      : `<a class="nav-item" href="#/pomodoro" data-action="close-overlay">${icon('timer')}<span class="grow">Pomodoro</span></a>
         <a class="nav-item" href="#/revisao" data-action="close-overlay">${icon('listcheck')}<span class="grow">Revisão semanal</span></a>
         <button type="button" class="nav-item" data-action="appearance">${icon('palette')}<span class="grow">Aparência</span></button>
         <button type="button" class="nav-item" data-action="export">${icon('download')}<span class="grow">Exportar backup</span></button>
@@ -2093,6 +2094,7 @@
 
   /* ---------- finanças ---------- */
   const FIN = {
+    saving: { label: 'Dinheiro guardado', plural: 'Guardado', ico: 'coin', col: 'var(--fin-4)' },
     account: { label: 'Conta bancária', plural: 'Contas bancárias', ico: 'wallet', col: 'var(--text-2)' },
     bill: { label: 'Conta a pagar', plural: 'Contas', ico: 'repeat', col: 'var(--fin-1)' },
     card: { label: 'Cartão', plural: 'Cartões', ico: 'card', col: 'var(--fin-2)' },
@@ -2123,7 +2125,7 @@
 
   // Ocorrência do item no mês (ou null): número da parcela e dia de vencimento.
   function finOcc(it, m) {
-    if (it.kind === 'account' || !it.start_month) return null;
+    if (it.kind === 'account' || it.kind === 'saving' || !it.start_month) return null;
     const k = monthIdx(m) - monthIdx(it.start_month);
     if (k < 0 || (it.installments && k >= it.installments)) return null;
     const [y, mo] = m.split('-').map(Number);
@@ -2221,6 +2223,7 @@
     const pct = T.out ? Math.round((T.paidOut / T.out) * 100) : 0;
     const outs = es.filter((e) => e.it.kind !== 'receivable'), ins = es.filter((e) => e.it.kind === 'receivable');
     const accts = S.finItems.filter((i) => i.kind === 'account');
+    const savs = S.finItems.filter((i) => i.kind === 'saving'), saved = savs.reduce((n, i) => n + (Number(i.amount) || 0), 0);
     const card = (cls, label, val, sub) => `<div class="fin-card ${cls}" role="listitem"><span>${label}</span><b>${val}</b><small>${sub}</small></div>`;
     return `<div class="page-head"><div><h1>Finanças</h1><p class="sub">Contas, cartões, dívidas e o que você tem a receber.</p></div>
         <div class="fin-month"><button type="button" class="icon-btn" data-action="fin-month" data-value="-1" aria-label="Mês anterior">${icon('chevL', 18)}</button><span class="fin-mlabel" aria-live="polite">${esc(monthLabel(m))}</span><button type="button" class="icon-btn" data-action="fin-month" data-value="1" aria-label="Próximo mês">${icon('chev', 18)}</button></div></div>
@@ -2228,6 +2231,7 @@
         ${card('hero', 'A pagar no mês', money(toPay), `${pct}% pago de ${money(T.out)}`)}
         ${card('', 'A receber', money(toGet), `de ${money(T.inn)} no mês`)}
         ${card('', 'Saldo em contas', money(saldo), plural(accts.length, 'conta', 'contas'))}
+        ${card('', 'Guardado', money(saved), savs.length ? plural(savs.length, 'reserva', 'reservas') : 'Nada cadastrado')}
         ${card('', 'Previsto no fim do mês', money(saldo + toGet - toPay), 'saldo + a receber − a pagar')}
       </div>
       <div class="fin-prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Contas pagas no mês"><i style="width:${pct}%"></i></div>
@@ -2240,26 +2244,28 @@
       <div class="section-title"><span>A receber</span></div>
       ${ins.length ? `<div class="fin-list">${ins.map(finRow).join('')}</div>` : '<div class="card empty sm"><p>Nenhum valor a receber neste mês.</p></div>'}
       <div class="section-title"><span>Contas bancárias</span></div>
-      ${accts.length ? `<div class="fin-accts">${accts.map((a) => `<button type="button" class="fin-acct" data-action="fin-edit" data-id="${a.id}"><span class="fin-ico" style="--c:var(--text-2)">${icon('wallet', 16)}</span><span class="fin-txt"><b>${esc(a.name)}</b><small>Saldo</small></span><span class="fin-amt">${money(a.amount)}</span></button>`).join('')}</div>` : '<div class="card empty sm"><p>Cadastre suas contas para ver o saldo previsto.</p></div>'}`;
+      ${accts.length ? `<div class="fin-accts">${accts.map((a) => `<button type="button" class="fin-acct" data-action="fin-edit" data-id="${a.id}"><span class="fin-ico" style="--c:var(--text-2)">${icon('wallet', 16)}</span><span class="fin-txt"><b>${esc(a.name)}</b><small>Saldo</small></span><span class="fin-amt">${money(a.amount)}</span></button>`).join('')}</div>` : '<div class="card empty sm"><p>Cadastre suas contas para ver o saldo previsto.</p></div>'}
+      <div class="section-title"><span>Dinheiro guardado</span><button type="button" class="btn sm" data-action="fin-new" data-value="saving">${icon('plus', 16)}Adicionar</button></div>
+      ${savs.length ? `<div class="fin-accts">${savs.map((a) => `<button type="button" class="fin-acct" data-action="fin-edit" data-id="${a.id}"><span class="fin-ico" style="--c:var(--fin-4)">${icon('coin', 16)}</span><span class="fin-txt"><b>${esc(a.name)}</b><small>Guardado</small></span><span class="fin-amt in">${money(a.amount)}</span></button>`).join('')}</div>` : '<div class="card empty sm"><p>Registre aqui o que você já guardou: reserva, investimentos, cofrinho.</p></div>'}`;
   }
 
   function finKindSheet() {
     blurIn(overlay);
     overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="O que adicionar">
       <div class="sheet-title">O que adicionar?</div>
-      ${['bill', 'card', 'debt', 'receivable', 'account'].map((k) => `<button type="button" class="nav-item" data-action="fin-new" data-value="${k}"><span class="nav-ico">${icon(FIN[k].ico)}</span><span class="grow">${FIN[k].label}</span></button>`).join('')}</div></div>`;
+      ${['bill', 'card', 'debt', 'receivable', 'account', 'saving'].map((k) => `<button type="button" class="nav-item" data-action="fin-new" data-value="${k}"><span class="nav-ico">${icon(FIN[k].ico)}</span><span class="grow">${FIN[k].label}</span></button>`).join('')}</div></div>`;
   }
   function finDialog(kind, it) {
-    const k = it ? it.kind : kind, acc = k === 'account';
+    const k = it ? it.kind : kind, acc = k === 'account' || k === 'saving';
     const dueLbl = k === 'receivable' ? 'Dia do recebimento' : 'Dia do vencimento';
-    const hint = { bill: 'Valor fixo que se repete todo mês.', card: 'Valor habitual é opcional: você informa o valor da fatura em cada mês.', debt: 'Informe o valor da parcela e quantas parcelas faltam desde o mês inicial.', receivable: 'Para valor único, use 1 mês. Vazio = todo mês.', account: 'O saldo é atualizado por você, quando quiser.' }[k];
+    const hint = { bill: 'Valor fixo que se repete todo mês.', card: 'Valor habitual é opcional: você informa o valor da fatura em cada mês.', debt: 'Informe o valor da parcela e quantas parcelas faltam desde o mês inicial.', receivable: 'Para valor único, use 1 mês. Vazio = todo mês.', account: 'O saldo é atualizado por você, quando quiser.', saving: 'Informe quanto já está guardado. Atualize o valor quando guardar mais ou retirar.' }[k];
     blurIn(overlay);
     overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="${it ? 'Editar' : 'Novo'}: ${FIN[k].label}">
       <h2>${it ? 'Editar' : 'Novo'}: ${FIN[k].label.toLowerCase()}</h2>
       <form data-form="finance" data-id="${it ? it.id : ''}" data-kind="${k}">
-        <div class="field"><label for="fn-name">Nome</label><input class="input" id="fn-name" name="name" value="${esc(it ? it.name : '')}" placeholder="${{ bill: 'Ex.: Internet', card: 'Ex.: Nubank', debt: 'Ex.: Financiamento', receivable: 'Ex.: Cliente Duo', account: 'Ex.: Conta corrente' }[k]}" required maxlength="60"></div>
+        <div class="field"><label for="fn-name">Nome</label><input class="input" id="fn-name" name="name" value="${esc(it ? it.name : '')}" placeholder="${{ bill: 'Ex.: Internet', card: 'Ex.: Nubank', debt: 'Ex.: Financiamento', receivable: 'Ex.: Cliente Duo', account: 'Ex.: Conta corrente', saving: 'Ex.: Reserva de emergência' }[k]}" required maxlength="60"></div>
         <div class="split">
-          <div class="field"><label for="fn-amt">${acc ? 'Saldo (R$)' : k === 'card' ? 'Valor habitual (R$)' : k === 'debt' ? 'Valor da parcela (R$)' : 'Valor (R$)'}</label><input class="input" id="fn-amt" name="amount" inputmode="decimal" value="${it && it.amount ? String(it.amount).replace('.', ',') : ''}" placeholder="0,00" ${k === 'card' || acc ? '' : 'required'}></div>
+          <div class="field"><label for="fn-amt">${k === 'saving' ? 'Valor guardado (R$)' : acc ? 'Saldo (R$)' : k === 'card' ? 'Valor habitual (R$)' : k === 'debt' ? 'Valor da parcela (R$)' : 'Valor (R$)'}</label><input class="input" id="fn-amt" name="amount" inputmode="decimal" value="${it && it.amount ? String(it.amount).replace('.', ',') : ''}" placeholder="0,00" ${k === 'card' || acc ? '' : 'required'}></div>
           ${acc ? '' : `<div class="field"><label for="fn-day">${dueLbl}</label><input class="input" id="fn-day" name="due_day" type="number" min="1" max="31" value="${it && it.due_day ? it.due_day : new Date().getDate()}" required></div>`}
         </div>
         ${acc ? '' : `<div class="split">
@@ -2275,7 +2281,7 @@
   function finPayDialog(id) {
     const it = finItem(id);
     if (!it) return;
-    if (it.kind === 'account') { finDialog(null, it); return; }
+    if (it.kind === 'account' || it.kind === 'saving') { finDialog(null, it); return; }
     const m = S.finMonth, e = finEntries(m).find((x) => x.it.id === id);
     if (!e) return;
     blurIn(overlay);
@@ -2294,14 +2300,14 @@
     const name = String(f.get('name')).trim();
     if (!name) return;
     const amount = parseMoney(f.get('amount'));
-    if (amount == null && k !== 'card' && k !== 'account') { toast('Informe um valor válido', 'error'); return; }
+    if (amount == null && k !== 'card' && k !== 'account' && k !== 'saving') { toast('Informe um valor válido', 'error'); return; }
     const inst = parseInt(f.get('installments'), 10);
     const row = {
       ...(old || { id: uid(), created_at: nowISO(), note: '' }),
       kind: k, name, amount: amount || 0,
-      due_day: k === 'account' ? null : clamp(parseInt(f.get('due_day'), 10) || 1, 1, 31),
-      start_month: k === 'account' ? null : String(f.get('start_month') || S.finMonth),
-      installments: k === 'account' || !(inst > 0) ? null : clamp(inst, 1, 600)
+      due_day: k === 'account' || k === 'saving' ? null : clamp(parseInt(f.get('due_day'), 10) || 1, 1, 31),
+      start_month: k === 'account' || k === 'saving' ? null : String(f.get('start_month') || S.finMonth),
+      installments: k === 'account' || k === 'saving' || !(inst > 0) ? null : clamp(inst, 1, 600)
     };
     finSave(row);
     closeOverlay();
