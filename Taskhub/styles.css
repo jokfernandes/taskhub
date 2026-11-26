@@ -634,8 +634,10 @@ html, body { overflow-x: clip; }
   /* diálogos */
   .overlay.center { align-items: flex-end; padding: 0; }
   .dialog { width: 100%; max-height: 92dvh; border-radius: 26px 26px 0 0; padding: 22px 16px calc(22px + env(safe-area-inset-bottom)); animation: sheetup .26s cubic-bezier(.2, .8, .2, 1); }
-  .dialog .acts { flex-wrap: wrap; }
-  .dialog .acts .r { flex: 1; justify-content: flex-end; }
+  .dialog .acts { flex-direction: column; align-items: stretch; gap: 8px; }
+  .dialog .acts .r { width: 100%; display: flex; gap: 8px; }
+  .dialog .acts .r .btn { flex: 1; min-height: 44px; white-space: nowrap; justify-content: center; }
+  .dialog .acts > span:empty { display: none; }
   .emoji-pick { grid-template-columns: repeat(6, 1fr); }
   .skins { grid-template-columns: repeat(2, 1fr); }
 
@@ -958,3 +960,38 @@ a.fin-main, a.fin-tile, a.fin-back { color: inherit; text-decoration: none; }
 }
 .fin-line-h .fin-txt { flex: 1; min-width: 0; }
 .fin-line-h .fin-txt b, .fin-line-h .fin-txt small { white-space: normal; overflow: visible; text-overflow: clip; }
+
+/* v18: divisão por compra, atrasados e resumo na visão geral */
+.fin-split-view { display: grid; gap: 8px; padding: 8px 12px 12px; }
+.fin-mine { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: var(--accent-soft); font-size: 13px; }
+.fin-mine b { color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.fin-person { display: flex; align-items: center; gap: 10px; padding: 8px 4px; }
+.fin-person-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.fin-person-h { display: flex; justify-content: space-between; gap: 8px; }
+.fin-person small { color: var(--text-2); }
+.fin-person.paid .fin-amt { opacity: .6; }
+.fin-person-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.fin-person-btns .btn { min-height: 36px; position: relative; }
+.fin-person-btns .btn::after { content: ""; position: absolute; inset: -4px; }
+.fin-line-s { padding: 0 12px 10px; }
+.fin-owe { display: grid; gap: 8px; }
+.fin-owe-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); }
+.fin-splits { border: 1px solid var(--border); border-radius: 16px; padding: 10px 12px 12px; margin: 0 0 12px; display: grid; gap: 8px; min-width: 0; }
+.fin-splits legend { font-size: 13px; color: var(--text-2); padding: 0 6px; }
+.fin-split-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 64px 44px; gap: 6px; align-items: center; }
+.fin-split-row .input, .fin-split-row .select { min-width: 0; }
+.fin-mine-prev { font-size: 13px; color: var(--text-2); min-height: 0; }
+.fin-mine-prev.err { color: var(--danger); }
+.fin-glance { display: grid; gap: 6px; }
+.glance-sum { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-2); margin-bottom: 4px; }
+.glance-sum b { color: var(--text); font-variant-numeric: tabular-nums; }
+.glance-sum b.in, .fin-amt.in { color: var(--accent-text); }
+.glance-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; text-decoration: none; color: inherit; min-height: 44px; }
+.glance-row small.late { color: var(--danger); }
+.glance-more, .glance-empty { font-size: 13px; color: var(--text-2); margin: 0; }
+@media (max-width: 480px) {
+  .fin-split-row { grid-template-columns: minmax(0, 1fr) 76px 60px 44px; }
+  .fin-person { flex-wrap: wrap; }
+  .fin-person-btns { width: 100%; }
+  .fin-person-btns .btn { flex: 1; min-height: 44px; }
+}

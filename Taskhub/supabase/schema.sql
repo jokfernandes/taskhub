@@ -100,6 +100,7 @@ create table if not exists public.finance_lines (
   start_month text,
   installments integer,
   payer text not null default '',
+  splits jsonb not null default '[]'::jsonb,
   note text not null default '',
   created_at timestamptz not null default now()
 );
@@ -112,6 +113,7 @@ create table if not exists public.finance_receipts (
   line_id uuid references public.finance_lines(id) on delete cascade,
   month text,
   amount numeric(14,2) not null default 0,
+  person text,
   received_on date,
   created_at timestamptz not null default now()
 );
