@@ -90,6 +90,33 @@ create table if not exists public.finance_payments (
 );
 
 create index if not exists finance_payments_item_idx on public.finance_payments (item_id);
+
+create table if not exists public.finance_lines (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item_id uuid references public.finance_items(id) on delete cascade,
+  name text not null default '',
+  amount numeric(14,2) not null default 0,
+  start_month text,
+  installments integer,
+  payer text not null default '',
+  note text not null default '',
+  created_at timestamptz not null default now()
+);
+create index if not exists finance_lines_item_idx on public.finance_lines (item_id);
+
+create table if not exists public.finance_receipts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  item_id uuid references public.finance_items(id) on delete cascade,
+  line_id uuid references public.finance_lines(id) on delete cascade,
+  month text,
+  amount numeric(14,2) not null default 0,
+  received_on date,
+  created_at timestamptz not null default now()
+);
+create index if not exists finance_receipts_item_idx on public.finance_receipts (item_id);
+create index if not exists finance_receipts_line_idx on public.finance_receipts (line_id);
 create index if not exists tasks_project_idx on public.tasks (project_id);
 create index if not exists activity_project_idx on public.activity (project_id);
 create index if not exists milestones_project_idx on public.milestones (project_id);
@@ -98,7 +125,7 @@ create index if not exists milestones_project_idx on public.milestones (project_
 do $$
 declare t text;
 begin
-  foreach t in array array['projects','tasks','milestones','activity','water_log','finance_items','finance_payments'] loop
+  foreach t in array array['projects','tasks','milestones','activity','water_log','finance_items','finance_payments','finance_lines','finance_receipts'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "%s_own" on public.%I', t, t);
     execute format(

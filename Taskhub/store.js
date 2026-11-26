@@ -11,7 +11,7 @@
       })
     : null;
 
-  const empty = () => ({ projects: [], tasks: [], activity: [], water_log: [], milestones: [], finance_items: [], finance_payments: [] });
+  const empty = () => ({ projects: [], tasks: [], activity: [], water_log: [], milestones: [], finance_items: [], finance_payments: [], finance_lines: [], finance_receipts: [] });
 
   const local = {
     read() {
@@ -58,16 +58,18 @@
     async load() {
       if (!sb) return local.read();
       const soft = (q) => q.then((r) => (r.error ? [] : r.data)); // tabelas novas: não derrubam o app se faltar a migração
-      const [projects, tasks, activity, water_log, milestones, finance_items, finance_payments] = await Promise.all([
+      const [projects, tasks, activity, water_log, milestones, finance_items, finance_payments, finance_lines, finance_receipts] = await Promise.all([
         sb.from('projects').select('*').order('created_at', { ascending: true }).then(check),
         sb.from('tasks').select('*').then(check),
         sb.from('activity').select('*').order('created_at', { ascending: false }).limit(500).then(check),
         soft(sb.from('water_log').select('*').order('day', { ascending: false }).limit(60)),
         soft(sb.from('milestones').select('*').order('created_at', { ascending: true })),
         soft(sb.from('finance_items').select('*').order('created_at', { ascending: true })),
-        soft(sb.from('finance_payments').select('*'))
+        soft(sb.from('finance_payments').select('*')),
+        soft(sb.from('finance_lines').select('*').order('created_at', { ascending: true })),
+        soft(sb.from('finance_receipts').select('*'))
       ]);
-      return { projects, tasks, activity, water_log, milestones, finance_items, finance_payments };
+      return { projects, tasks, activity, water_log, milestones, finance_items, finance_payments, finance_lines, finance_receipts };
     },
 
     async save(table, row) {
@@ -92,7 +94,12 @@
           data.activity = data.activity.filter((a) => a.project_id !== id);
           data.milestones = data.milestones.filter((m) => m.project_id !== id);
         }
-        if (table === 'finance_items') data.finance_payments = data.finance_payments.filter((x) => x.item_id !== id);
+        if (table === 'finance_items') {
+          data.finance_payments = data.finance_payments.filter((x) => x.item_id !== id);
+          data.finance_lines = data.finance_lines.filter((x) => x.item_id !== id);
+          data.finance_receipts = data.finance_receipts.filter((x) => x.item_id !== id);
+        }
+        if (table === 'finance_lines') data.finance_receipts = data.finance_receipts.filter((x) => x.line_id !== id);
         if (table === 'milestones') data.tasks.forEach((t) => { if (t.milestone_id === id) t.milestone_id = null; });
         local.write(data);
         return;
@@ -112,7 +119,9 @@
           water_log: state.water,
           milestones: state.milestones,
           finance_items: state.finItems,
-          finance_payments: state.finPays
+          finance_payments: state.finPays,
+          finance_lines: state.finLines,
+          finance_receipts: state.finRecs
         },
         null,
         2
