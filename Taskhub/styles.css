@@ -303,7 +303,9 @@ button.group-head { width: 100%; text-align: left; }
 .dialog { width: min(440px, 100%); background: var(--bg); border: 1px solid var(--border); border-radius: 26px; padding: 26px; box-shadow: var(--shadow-lg); animation: pop .22s cubic-bezier(.2, .8, .2, 1); }
 .dialog h2 { font-size: 21px; margin-bottom: 20px; }
 .dialog .acts { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; }
-.dialog .acts .r { display: flex; gap: 8px; }
+.dialog .acts { flex-wrap: wrap; }
+.dialog .acts .r { display: flex; gap: 8px; flex-wrap: wrap; }
+.dialog .acts .btn { white-space: nowrap; }
 .emoji-pick { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
 .emoji-pick button { height: 42px; border-radius: 12px; font-size: 20px; background: var(--surface); border: 1.5px solid transparent; }
 .emoji-pick button.on { border-color: var(--accent-text); background: var(--accent-soft); }
