@@ -95,7 +95,8 @@
   const COLORS = ['#ff453a', '#ff9f0a', '#ffd60a', '#30d158', '#40c8e0', '#0a84ff', '#bf5af2', '#ff4f79'];
   // Prioridade de 1 (baixa) a 5 (alta). Valores antigos (low/medium/high) são convertidos.
   const normPrio = (v) => clamp(Math.round(typeof v === 'number' ? v : ({ low: 1, medium: 3, high: 5 }[v] || parseInt(v, 10) || 3)), 1, 5);
-  const prioTag = (p) => `<span class="prio p${p}" title="Prioridade ${p} de 5">P${p}</span>`;
+  const PRIO = { 1: 'Muito baixa', 2: 'Baixa', 3: 'Média', 4: 'Alta', 5: 'Muito alta' };
+  const prioTag = (p) => `<span class="prio p${p}" title="Prioridade ${p} de 5">${PRIO[p]}</span>`;
   const lastGrapheme = (s) => {
     s = String(s || '').trim();
     const a = window.Intl && Intl.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map((x) => x.segment) : Array.from(s);
@@ -104,7 +105,7 @@
   const EMOJIS = ['📁', '🎨', '💼', '🚀', '📚', '🏠', '💡', '🎯', '✍️', '🛠️', '📈', '🎬'];
   const ACT = {
     project: { verb: 'criou o projeto', icon: 'folder' },
-    created: { verb: 'abriu', icon: 'plus' },
+    created: { verb: 'criou', icon: 'plus' },
     todo: { verb: 'devolveu para A fazer', icon: 'list' },
     doing: { verb: 'iniciou', icon: 'flame' },
     done: { verb: 'concluiu', icon: 'check' },
@@ -119,7 +120,7 @@
 
   /* ---------- estado ---------- */
   const S = {
-    projects: [], tasks: [], activity: [], milestones: [], water: [], finItems: [], finPays: [], finLines: [], finRecs: [], finTab: 'month', finF: { q: '', type: 'all', status: 'all', sort: 'due' }, finMonth: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })(), user: null, loading: true,
+    projects: [], tasks: [], activity: [], milestones: [], water: [], finItems: [], finPays: [], finLines: [], finRecs: [], finTab: 'month', finF: { q: '', type: 'all', status: 'all', sort: 'due' }, finMonth: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })(), user: null, loading: true, loadError: false,
     heatDay: null, justDone: null, waterEdit: false, heatFull: false, filtersOpen: false, boardTab: 'todo',
     sort: (() => { try { const v = localStorage.getItem('taskhub:sort'); return SORTS[v] ? v : 'priority'; } catch (e) { return 'priority'; } })(),
     route: { view: 'home' },
@@ -149,7 +150,7 @@
   async function persist(table, row) {
     try { await Store.save(table, row); } catch (e) {
       console.error(e);
-      toast('Não foi possível salvar. Verifique sua conexão e se rodou a migração do banco.', 'error');
+      toast('Não salvou. Confira a conexão e tente de novo.', 'error');
     }
   }
   async function removeRow(table, id) {
@@ -177,10 +178,23 @@
     try {
       normalize(await Store.load());
       lastSync = Date.now();
+      S.loadError = false;
     } catch (e) {
       console.error(e);
-      toast('Não foi possível carregar seus dados.', 'error');
+      if (lastSync) toast('Não foi possível atualizar seus dados.', 'error');
+      else S.loadError = true; // sem nada carregado: tela de erro, nunca o estado vazio
     }
+  }
+  let retrying = false;
+  async function retryLoad() {
+    if (retrying) return;
+    retrying = true;
+    render();
+    await loadData();
+    retrying = false;
+    if (!S.loadError) runRecurrences();
+    render();
+    openPending();
   }
 
   /* ---------- desfazer ---------- */
@@ -286,7 +300,7 @@
   }
   function deleteTask(t) {
     S.tasks = S.tasks.filter((x) => x.id !== t.id);
-    undoable(t.recurrence ? 'Recorrência excluída' : 'Excluída', () => {
+    undoable(t.recurrence ? 'Recorrência excluída' : 'Tarefa excluída', () => {
       if (getProject(t.project_id)) { S.tasks.push(t); render(); }
     }, () => {
       logActivity('deleted', t.recurrence ? t.title : taskMsg(t), t.project_id, null);
@@ -345,6 +359,7 @@
   const saveDensity = (v) => { try { localStorage.setItem('taskhub:density', v); } catch (e) {} };
   const applyDensity = () => { document.documentElement.dataset.density = density(); };
 
+  function saveSort(v) { S.sort = v; try { localStorage.setItem('taskhub:sort', v); } catch (e) {} }
   function taskSorter() {
     if (S.sort === 'due') return (a, b) => (a.due_date || '9999').localeCompare(b.due_date || '9999') || b.priority - a.priority;
     if (S.sort === 'created') return (a, b) => b.created_at.localeCompare(a.created_at);
@@ -675,7 +690,7 @@
   }
   function timeline(items, opts) {
     opts = opts || {};
-    if (!items.length) return `<div class="empty sm"><p>Nada por aqui ainda. Cada tarefa aberta, iniciada ou concluída aparece neste histórico.</p></div>`;
+    if (!items.length) return `<div class="empty sm"><p>Nada por aqui ainda. Cada tarefa criada, iniciada ou concluída aparece neste histórico.</p></div>`;
     let html = '<div class="tl">';
     let lastDay = '';
     for (const a of items) {
@@ -1034,19 +1049,27 @@
     if (!S.finItems.some((i) => ['bill', 'card', 'debt', 'receivable'].includes(i.kind))) return '';
     const now = new Date(), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()), cur = monthKey(now), rows = [];
     const dateOf = (mo, day) => new Date(+mo.slice(0, 4), +mo.slice(5, 7) - 1, day);
-    finOverdue().forEach((e) => rows.push({ e, d: dateOf(e.overdue, e.day), amt: e.amount, isIn: false, label: `Atrasada de ${monthLabel(e.overdue).split(" de ")[0]}` }));
+    const addOthers = (e, d, late) => {
+      const owed = round2(e.others.total - e.others.got);
+      if (owed > REC_TOL) rows.push({ e, d, amt: owed, isIn: true, label: 'De outras pessoas', late });
+    };
+    finOverdue().forEach((e) => {
+      const d = dateOf(e.overdue, e.day);
+      rows.push({ e, d, amt: e.amount, isIn: false, label: `Atrasada de ${monthLabel(e.overdue).split(" de ")[0]}` });
+      addOthers(e, d, true);
+    });
     [cur, addMonths(cur, 1)].forEach((mo) => finEntries(mo).forEach((e) => {
       const isIn = e.it.kind === 'receivable', d = dateOf(mo, e.day), diff = Math.round((d - t0) / 864e5);
       if (isIn && mo === cur && e.carry > REC_TOL) rows.push({ e, d: t0, amt: e.carry, isIn, label: 'Em aberto de meses anteriores', late: true });
       const left = isIn ? Math.max(0, e.amount - e.got) : e.paid ? 0 : e.amount;
-      if ((left <= REC_TOL && !e.unset) || diff > 7) return;
-      rows.push({ e, d, amt: left, isIn, unset: e.unset, label: diff < 0 ? (isIn ? 'Atrasado' : 'Atrasada') : diff === 0 ? 'Hoje' : diff === 1 ? 'Amanhã' : `Em ${diff} dias`, late: diff < 0 });
+      if ((left > REC_TOL || e.unset) && diff <= 7) rows.push({ e, d, amt: left, isIn, unset: e.unset, label: diff < 0 ? (isIn ? 'Atrasado' : 'Atrasada') : diff === 0 ? 'Hoje' : diff === 1 ? 'Amanhã' : `Em ${diff} dias`, late: diff < 0 });
+      if (!isIn && diff <= 7) addOthers(e, d, false);
     }));
     rows.sort((a, b) => a.d - b.d);
     const out = rows.filter((r) => !r.isIn).reduce((n, r) => n + r.amt, 0), inn = rows.filter((r) => r.isIn).reduce((n, r) => n + r.amt, 0), shown = rows.slice(0, 6);
     return `<section class="card fin-glance" aria-label="Finanças">
       <div class="section-title"><span>Finanças</span><a class="link-btn" href="#/financas">Ver tudo</a></div>
-      ${rows.length ? `<div class="glance-sum"><span>A pagar <b>${money(out)}</b></span><span>A receber <b class="in">${money(inn)}</b></span></div>
+      ${rows.length ? `<p class="glance-cap">Próximos 7 dias e atrasados</p><div class="glance-sum"><span>A pagar <b>${money(out)}</b></span><span>A receber <b class="in">${money(inn)}</b></span></div>
       ${shown.map((r) => { const k = FIN[r.e.it.kind]; return `<a class="glance-row" href="#/financas${r.e.it.kind === 'card' || r.e.it.kind === 'receivable' ? `/item/${r.e.it.id}` : ''}"><span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span><span class="fin-txt"><b>${esc(r.e.it.name)}</b><small class="${r.late || r.label.startsWith('Atrasa') ? 'late' : ''}">${esc(r.label)}${r.d >= t0 && !r.late ? ` · dia ${r.d.getDate()}` : ''}</small></span><span class="fin-amt ${r.isIn ? 'in' : ''}">${r.unset ? '<em>Informar valor</em>' : `${r.isIn ? '+' : ''}${money(r.amt)}`}</span></a>`; }).join('')}
       ${rows.length > shown.length ? `<a class="glance-more" href="#/financas">Mais ${rows.length - shown.length}</a>` : ''}` : '<p class="glance-empty">Nada vence nos próximos 7 dias e nada está atrasado.</p>'}
     </section>`;
@@ -1059,7 +1082,7 @@
         <p>Cada projeto funciona como um repositório: tem suas tarefas, um quadro e um histórico do que foi feito.</p>
         <div class="acts">
           <button class="btn primary" data-action="new-project">${icon('plus', 16)}Novo projeto</button>
-          <button class="btn" data-action="seed">Ver com exemplos</button>
+          <button class="btn" data-action="seed">Criar projeto de exemplo</button>
         </div>
       </div>`;
     }
@@ -1084,7 +1107,7 @@
         <div class="stat hero"><b>${open.length}</b><span>${open.length === 1 ? 'tarefa aberta' : 'tarefas abertas'}</span></div>
         <div class="stat"><b>${doing.length}</b><span>em andamento</span></div>
         <div class="stat"><b>${doneWeek.length}</b><span>concluídas em 7 dias</span></div>
-        <div class="stat"><b>${st}</b><span>${st === 1 ? 'dia' : 'dias'} seguidos</span></div>
+        <div class="stat"><b>${st}</b><span>${st === 0 ? 'Conclua uma tarefa para começar a sequência' : st === 1 ? 'dia seguido' : 'dias seguidos'}</span></div>
       </div>
       ${waterCard()}
       <section class="card"><h2>Contribuições <small>${plural(hm.total, 'tarefa concluída', 'tarefas concluídas')} nos últimos ${hm.weeks === 13 ? '3' : '9'} meses</small></h2>${hm.html}${hm.small ? `<button type="button" class="link-btn heat-more" data-action="heat-more">${S.heatFull ? 'Ver menos' : 'Ver mais meses'}</button>` : ''}${heatDayList()}</section>
@@ -1172,19 +1195,29 @@
       <div class="toolbar">
         <div class="segmented">${tabLink('list', 'Lista', 'list')}${tabLink('board', 'Quadro', 'board')}${tabLink('activity', 'Atividade', 'activity')}</div>
         ${tab !== 'activity' ? `<button type="button" class="btn filter-btn" data-action="toggle-filters" aria-expanded="${S.filtersOpen}">${icon('search', 15)}Filtrar${filtersActive() ? '<i class="fdot" aria-label="filtros ativos"></i>' : ''}</button><div class="tools ${S.filtersOpen ? 'open' : ''}">
-          <label class="search">${icon('search', 15)}<input id="search" data-filter="q" placeholder="Filtrar" value="${esc(S.filters.q)}" aria-label="Filtrar tarefas"></label>
+          <label class="search">${icon('search', 15)}<input id="search" data-filter="q" placeholder="Buscar tarefa" value="${esc(S.filters.q)}" aria-label="Buscar tarefas"></label>
           ${tab === 'list' ? `<select class="select" data-filter="sort" aria-label="Ordenar">${Object.keys(SORTS).map((k) => `<option value="${k}" ${S.sort === k ? 'selected' : ''}>${SORTS[k]}</option>`).join('')}</select>` : ''}
           <select class="select" data-filter="priority" aria-label="Prioridade">
             <option value="all">Todas as prioridades</option>
-            ${['5', '4', '3', '2', '1'].map((k) => `<option value="${k}" ${String(S.filters.priority) === k ? 'selected' : ''}>Prioridade ${k}</option>`).join('')}
+            ${['5', '4', '3', '2', '1'].map((k) => `<option value="${k}" ${String(S.filters.priority) === k ? 'selected' : ''}>Prioridade: ${PRIO[k]}</option>`).join('')}
           </select></div>` : ''}
       </div>
       ${tab !== 'activity' ? `<form class="quick" data-form="quick-add" autocomplete="off">
         <span class="plus">${icon('plus', 18)}</span>
-        <input id="quick" placeholder="Nova tarefa e Enter" aria-label="Nova tarefa">
+        <input id="quick" placeholder="Adicionar tarefa" aria-label="Adicionar tarefa">
         <button type="button" class="btn ghost" data-action="new-recurring" data-id="${p.id}">${icon('repeat', 15)}Recorrente</button>
         <kbd>N</kbd></form>` : ''}
       <div id="tasks-area">${tasksArea(p)}</div>`;
+  }
+
+  function errorView() {
+    return `<div class="auth"><div class="auth-card" role="alert">
+      <div class="logo">${icon('reset', 26)}</div>
+      <h1>Seus dados não carregaram</h1>
+      <p class="sub">${Store.mode === 'cloud' ? 'Confira a conexão e tente de novo.' : 'Tente de novo em instantes.'} Nada foi apagado.</p>
+      <button type="button" class="btn primary block" data-action="retry-load" ${retrying ? 'disabled' : ''}>${retrying ? 'Carregando…' : 'Tentar de novo'}</button>
+      ${Store.mode === 'cloud' ? '<button type="button" class="btn ghost block" data-action="signout">Sair</button>' : ''}
+    </div></div>`;
   }
 
   function authView() {
@@ -1269,7 +1302,7 @@
         ${S.projects.length > 1 ? `<select class="select" name="project" aria-label="Projeto">${S.projects.map((p) => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(p.emoji)} ${esc(p.name)}</option>`).join('')}</select>` : `<input type="hidden" name="project" value="${cur}">`}
         <div class="split">
           <label class="field-in"><span class="lbl">Prazo</span><input class="input" type="date" name="due" aria-label="Prazo"></label>
-          <label class="field-in"><span class="lbl">Prioridade</span><select class="select" name="priority" aria-label="Prioridade">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === 3 ? 'selected' : ''}>Prioridade ${k}</option>`).join('')}</select></label>
+          <label class="field-in"><span class="lbl">Prioridade</span><select class="select" name="priority" aria-label="Prioridade">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === 3 ? 'selected' : ''}>${PRIO[k]}</option>`).join('')}</select></label>
         </div>
         ${quickDue('')}
         <button class="btn primary block" type="submit">Criar tarefa</button>
@@ -1289,6 +1322,7 @@
 
     if (S.loading) { app.innerHTML = skeleton(); return; }
     if (Store.mode === 'cloud' && !S.user) { app.innerHTML = authView(); return; }
+    if (S.loadError) { blurIn(app); app.innerHTML = errorView(); return; }
     let view = '', title = APP_NAME;
     if (S.route.view === 'project') {
       const p = getProject(S.route.id);
@@ -1404,8 +1438,8 @@
             ${playBtn(t, 'lg') || ''}
           </div>
           <div class="field"><span class="lbl">Status</span>${seg('status', STATUS, t.status)}</div>` : ''}
-        <div class="field"><span class="lbl">Prioridade<small>1 baixa · 5 alta</small></span>
-          <div class="prio-pick">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="prio p${n} ${t.priority === n ? 'on' : ''}" data-action="set-priority" data-value="${n}" aria-label="Prioridade ${n}">${n}</button>`).join('')}</div></div>
+        <div class="field"><span class="lbl">Prioridade<small>${PRIO[t.priority]}</small></span>
+          <div class="prio-pick">${[1, 2, 3, 4, 5].map((n) => `<button type="button" class="prio p${n} ${t.priority === n ? 'on' : ''}" data-action="set-priority" data-value="${n}" aria-label="Prioridade ${n}: ${PRIO[n]}" aria-pressed="${t.priority === n}" title="${PRIO[n]}">${n}</button>`).join('')}</div></div>
         ${!tpl ? `<div class="field"><label for="d-due">Prazo</label><input class="input" type="date" id="d-due" value="${esc(t.due_date || '')}">${quickDue(t.due_date)}
           ${t.due_date ? `<button type="button" class="btn gcal" data-action="add-gcal">${icon('calendar', 15)}Adicionar ao Google Agenda</button>` : ''}</div>` : ''}
         ${sec('details', 'Detalhes', '', details)}
@@ -1485,7 +1519,7 @@
         <div class="field"><span class="lbl">Frequência</span><div class="recur-box">${recurFields(dlgRec)}</div></div>
         <div class="split">
           <div class="field"><label for="rc-start">Começa em</label><input class="input" type="date" id="rc-start" name="start" value="${ymd(new Date())}" required></div>
-          <div class="field"><label for="rc-prio">Prioridade</label><select class="select" id="rc-prio" name="priority">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === (src ? src.priority : 3) ? 'selected' : ''}>Prioridade ${k}</option>`).join('')}</select></div>
+          <div class="field"><label for="rc-prio">Prioridade</label><select class="select" id="rc-prio" name="priority">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === (src ? src.priority : 3) ? 'selected' : ''}>${PRIO[k]}</option>`).join('')}</select></div>
         </div>
         <div class="note">A cada ocorrência o Taskhub cria uma tarefa nova neste projeto, sozinho.</div>
         <div class="acts"><span></span><div class="r"><button type="button" class="btn" data-action="close-overlay">Cancelar</button><button class="btn primary" type="submit">Criar recorrência</button></div></div>
@@ -1592,6 +1626,7 @@
         break;
       }
       case 'signout': Store.signOut(); break;
+      case 'retry-load': retryLoad(); break;
       case 'auth-switch': S.authMode = S.authMode === 'signin' ? 'signup' : 'signin'; S.authMsg = null; render(); break;
       case 'new-project': S.sidebarOpen = false; render(); projectDialog(null); break;
       case 'edit-project': projectDialog(getProject(id)); break;
@@ -1657,16 +1692,8 @@
           break;
         }
       case 'focus-quick': {
-        const first = S.projects[0];
-        if (!first) return projectDialog(null);
-        const last = S.projects.find((p) => p.id === S.route.id) || first;
-        if (S.route.view !== 'project') {
-          location.hash = `#/p/${last.id}`;
-          setTimeout(() => { const q = document.getElementById('quick'); if (q) q.focus(); }, 50);
-        } else {
-          const q = document.getElementById('quick');
-          if (q) q.focus();
-        }
+        const q = S.route.view === 'project' && document.getElementById('quick');
+        if (q) q.focus(); else newTaskSheet();
         break;
       }
       case 'toggle-done': S.showDone = !S.showDone; renderTasksArea(); break;
@@ -2044,7 +2071,7 @@
       openDrawer(e.target.dataset.id);
       return;
     }
-    if (typing || e.metaKey || e.ctrlKey || e.altKey || overlay.firstElementChild) return;
+    if (typing || e.metaKey || e.ctrlKey || e.altKey || overlay.firstElementChild || S.loadError) return;
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
       const btn = document.querySelector('[data-action="focus-quick"]');
@@ -2092,8 +2119,18 @@
     const before = e.target.closest('[data-card]');
     const id = dragId;
     dragId = null;
-    if (col.classList.contains('list') && S.sort !== 'manual') { S.sort = 'manual'; try { localStorage.setItem('taskhub:sort', 'manual'); } catch (err) {} }
+    const t = getTask(id);
+    if (!t) return;
+    const prevSort = S.sort, prev = { status: t.status, position: t.position, completed_at: t.completed_at };
+    const toManual = col.classList.contains('list') && prevSort !== 'manual';
+    if (toManual) saveSort('manual');
     moveTask(id, col.dataset.col, before && before.dataset.card !== id ? before.dataset.card : null);
+    if (toManual) undoable('Ordem mudada para manual', () => {
+      saveSort(prevSort);
+      const cur = getTask(id);
+      if (cur) { setStatus(cur, prev.status); updateTask(cur, { position: prev.position, completed_at: prev.completed_at }); }
+      render();
+    }, () => {});
   });
 
   /* swipe nas tarefas (toque): direita conclui, esquerda abre opções */
@@ -2383,7 +2420,7 @@
       <ul class="fin-legend">${OUT_KINDS.map((k) => `<li><span class="sw" style="background:${FIN[k].col}"></span><span class="grow">${FIN[k].plural}</span><b>${money(T.byKind[k])}</b><small>${T.out ? Math.round((T.byKind[k] / T.out) * 100) : 0}%</small></li>`).join('')}</ul>`;
   }
   function finChartYear() {
-    const months = [-1, 0, 1, 2, 3, 4].map((d) => addMonths(S.finMonth, d));
+    const months = [0, 1, 2, 3, 4, 5].map((d) => addMonths(S.finMonth, d));
     const data = months.map((m) => { const T = finTotals(finEntries(m)); return { m, T }; });
     const max = Math.max(1, ...data.map((d) => Math.max(d.T.out, d.T.inn)));
     const W = 560, H = 200, top = 22, bot = 28, pl = 8, bw = 44, step = (W - pl * 2) / data.length;
@@ -2417,7 +2454,7 @@
     const status = e.paid ? (isIn ? 'Recebido' : 'Pago') : st === 'late' ? (e.overdue ? `Atrasada de ${monthLabel(e.overdue).split(" de ")[0]}` : 'Atrasado') : (S.finMonth === cur && e.day === today ? 'Vence hoje' : '');
     const meta = [e.overdue ? `venceu dia ${e.day}` : `dia ${e.day}`, it.kind === 'debt' && it.installments ? `parcela ${e.n}/${it.installments}` : '', isIn && it.installments > 1 && e.n ? `parcela ${e.n}/${it.installments}` : '',
       it.kind === 'card' && e.lines.filter((x) => !x.share).length ? plural(e.lines.filter((x) => !x.share).length, 'compra', 'compras') : '',
-      it.kind === 'card' && e.others.count ? `outros ${money(e.others.got)}/${money(e.others.total)}` : '',
+      it.kind === 'card' && e.others.count ? (e.others.total - e.others.got > REC_TOL ? `${money(e.others.total - e.others.got)} a receber de outras pessoas` : 'outras pessoas já pagaram') : '',
       isIn && !e.paid && e.got > 0 ? `recebido ${money(e.got)}` : '', isIn && e.carry > 0 ? `+${money(e.carry)} anteriores` : '', status].filter(Boolean);
     const inner = `<span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span>
         <span class="fin-txt"><b>${esc(it.name)}</b><small class="${st === 'late' ? 'late' : ''}">${esc(k.label)} · ${meta.join(' · ')}</small></span>
@@ -2548,7 +2585,7 @@
       <span class="fin-ico fin-av" style="--c:var(--fin-3)">${esc(String(sp.name || '?').trim().charAt(0).toUpperCase())}</span>
       <div class="fin-person-main"><div class="fin-person-h"><b>${nm}</b><span class="fin-amt">${money(sp.amount)}</span></div>
         <small>${done ? 'Pagou a parte dela' : sp.got > 0 ? `Pagou ${money(sp.got)} · falta ${money(rest)}` : 'Ainda não pagou'}</small>${finRecList(recs)}</div>
-      ${done ? '<span class="fin-pill ok">Pagou</span>' : `<div class="fin-person-btns"><button type="button" class="btn sm primary" data-action="fin-pay-split" ${d}>Pagou</button><button type="button" class="btn sm ghost" data-action="fin-rec-new" ${d}>Parcial</button></div>`}
+      ${done ? '<span class="fin-pill ok">Pagou</span>' : `<div class="fin-person-btns"><button type="button" class="btn sm primary" data-action="fin-pay-split" ${d}>Marcar como pago</button><button type="button" class="btn sm ghost" data-action="fin-rec-new" ${d}>Pagou parte</button></div>`}
     </div>`;
   }
   // Linha de uma compra do cartão (pode ser dividida com várias pessoas)
@@ -2582,8 +2619,8 @@
         ${finCard('', 'Minha parte', money(total - o.total), 'o que sai do meu bolso')}
         ${finCard('', 'Outras pessoas', money(o.total), o.count ? `recebi ${money(o.got)} · falta ${money(Math.max(0, o.total - o.got))}` : 'ninguém divide comigo')}
       </div>
-      ${e ? `<div class="fin-actions"><button type="button" class="btn ${e.paid ? '' : 'primary'} sm" data-action="fin-toggle" data-id="${it.id}" aria-pressed="${e.paid}">${e.paid ? 'Desmarcar fatura paga' : 'Marcar fatura como paga'}</button><button type="button" class="btn sm" data-action="fin-pay" data-id="${it.id}">${buy.length ? 'Valor manual da fatura' : 'Informar valor da fatura'}</button>${manual ? `<button type="button" class="btn sm ghost" data-action="fin-pay-clear" data-id="${it.id}">Usar a soma das compras</button>` : ''}</div>` : ''}
-      ${people.length ? `<div class="section-title"><span>Quem me deve este mês</span></div><div class="fin-owe">${people.map((pp) => `<div class="fin-owe-row"><span class="fin-ico fin-av" style="--c:var(--fin-3)">${esc(String(pp.name || '?').trim().charAt(0).toUpperCase())}</span><div class="fin-person-main"><div class="fin-person-h"><b>${esc(pp.name)}</b><span class="fin-amt">${money(pp.total)}</span></div><small>${pp.rest <= REC_TOL ? 'Pagou tudo' : `Pagou ${money(pp.got)} · falta ${money(pp.rest)}`}</small>${finBar(finPct(pp.got, pp.total), `Recebido de ${pp.name}`)}</div>${pp.rest <= REC_TOL ? '<span class="fin-pill ok">Pagou</span>' : `<button type="button" class="btn sm primary" data-action="fin-person-paid" data-id="${it.id}" data-person="${esc(pp.name)}" data-month="${m}">Pagou tudo</button>`}</div>`).join('')}</div>` : ''}
+      ${e ? `<div class="fin-actions"><button type="button" class="btn ${e.paid ? '' : 'primary'} sm" data-action="fin-toggle" data-id="${it.id}" aria-pressed="${e.paid}">${e.paid ? 'Desmarcar fatura paga' : 'Marcar fatura como paga'}</button><button type="button" class="btn sm" data-action="fin-pay" data-id="${it.id}">${buy.length ? 'Ajustar valor da fatura' : 'Informar valor da fatura'}</button>${manual ? `<button type="button" class="btn sm ghost" data-action="fin-pay-clear" data-id="${it.id}">Usar a soma das compras</button>` : ''}</div>` : ''}
+      ${people.length ? `<div class="section-title"><span>Quem me deve este mês</span></div><div class="fin-owe">${people.map((pp) => `<div class="fin-owe-row"><span class="fin-ico fin-av" style="--c:var(--fin-3)">${esc(String(pp.name || '?').trim().charAt(0).toUpperCase())}</span><div class="fin-person-main"><div class="fin-person-h"><b>${esc(pp.name)}</b><span class="fin-amt">${money(pp.total)}</span></div><small>${pp.rest <= REC_TOL ? 'Pagou tudo' : pp.got > REC_TOL ? `Pagou ${money(pp.got)} · falta ${money(pp.rest)}` : `Falta receber ${money(pp.rest)}`}</small>${finBar(finPct(pp.got, pp.total), `Recebido de ${pp.name}`)}</div>${pp.rest <= REC_TOL ? '<span class="fin-pill ok">Pagou</span>' : `<button type="button" class="btn sm primary" data-action="fin-person-paid" data-id="${it.id}" data-person="${esc(pp.name)}" data-month="${m}">Marcar como pago</button>`}</div>`).join('')}</div>` : ''}
       <div class="section-title"><span>Compras e parcelas</span><button type="button" class="btn primary sm" data-action="fin-line-new" data-id="${it.id}">${icon('plus', 16)}Compra</button></div>
       ${buy.length ? `<div class="fin-lines">${buy.map((x) => finLineRow(x, it, m)).join('')}</div>` : '<div class="card empty sm"><p>Sem compras neste mês. Adicione cada compra ou parcelamento (ex.: Renner R$ 100) e divida com quem paga junto: você escolhe quanto cada pessoa paga. Ou informe só o valor da fatura.</p></div>'}
       ${shares.length ? `<details class="fin-fold"><summary>Partes da fatura (modelo antigo)<span>${shares.length}</span></summary><div class="fin-lines">${shares.map((x) => finShareRow(x, it, m)).join('')}</div></details>` : ''}
@@ -2918,7 +2955,7 @@
 
   /* ---------- rotas e sincronização ---------- */
   function openPending() {
-    if (!pendingNew || S.loading || (Store.mode === 'cloud' && !S.user)) return;
+    if (!pendingNew || S.loading || S.loadError || (Store.mode === 'cloud' && !S.user)) return;
     pendingNew = false;
     try { history.replaceState(null, '', location.pathname + location.search + '#/'); } catch (err) {}
     S.route = { view: 'home' };
@@ -2934,10 +2971,13 @@
     return { view: 'home' };
   }
   window.addEventListener('hashchange', () => {
+    const prev = S.route;
     S.route = parseRoute();
     S.sidebarOpen = false;
-    S.filters = { q: '', priority: 'all' };
-    S.filtersOpen = false;
+    if (!(prev.view === 'project' && S.route.view === 'project' && prev.id === S.route.id)) {
+      S.filters = { q: '', priority: 'all' };
+      S.filtersOpen = false;
+    }
     if (pomoFull) { pomoFull = false; try { if (document.fullscreenElement) document.exitFullscreen(); } catch (err) {} }
     closeOverlay();
     render();
@@ -2946,11 +2986,13 @@
     window.scrollTo(0, 0);
     openPending();
   });
+  window.addEventListener('online', () => { if (S.loadError) retryLoad(); });
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && pomoFull) { pomoFull = false; render(); } });
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden) return;
     tick();
     if (overlay.firstElementChild || dragId) return;
+    if (S.loadError) { retryLoad(); return; }
     if (Store.mode === 'cloud' && S.user && Date.now() - lastSync > 15000) await loadData();
     runRecurrences();
     render();
@@ -2974,7 +3016,7 @@
         const was = S.user;
         S.user = user;
         if (user && !was) { await loadData(); runRecurrences(); S.loading = false; render(); openPending(); }
-        if (!user) { normalize({}); S.loading = false; render(); }
+        if (!user) { normalize({}); lastSync = 0; S.loadError = false; S.loading = false; render(); }
       });
     }
     if (S.user) { await loadData(); runRecurrences(); }
