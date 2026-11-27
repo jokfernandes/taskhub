@@ -1044,34 +1044,23 @@
       ${empty ? '<div class="empty sm"><p>Nada atrasado, vencendo hoje ou em andamento.</p></div>' : ''}
     </section>`;
   }
-  // Visão geral: o que vence nos próximos 7 dias, atrasadas e valores a receber próximos
+  // Visão geral: só contas a pagar que vencem de hoje até 7 dias (sem atrasadas e sem valores a receber)
   function finGlance() {
-    if (!S.finItems.some((i) => ['bill', 'card', 'debt', 'receivable'].includes(i.kind))) return '';
     const now = new Date(), t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()), cur = monthKey(now), rows = [];
     const dateOf = (mo, day) => new Date(+mo.slice(0, 4), +mo.slice(5, 7) - 1, day);
-    const addOthers = (e, d, late) => {
-      const owed = round2(e.others.total - e.others.got);
-      if (owed > REC_TOL) rows.push({ e, d, amt: owed, isIn: true, label: 'De outras pessoas', late });
-    };
-    finOverdue().forEach((e) => {
-      const d = dateOf(e.overdue, e.day);
-      rows.push({ e, d, amt: e.amount, isIn: false, label: `Atrasada de ${monthLabel(e.overdue).split(" de ")[0]}` });
-      addOthers(e, d, true);
-    });
     [cur, addMonths(cur, 1)].forEach((mo) => finEntries(mo).forEach((e) => {
-      const isIn = e.it.kind === 'receivable', d = dateOf(mo, e.day), diff = Math.round((d - t0) / 864e5);
-      if (isIn && mo === cur && e.carry > REC_TOL) rows.push({ e, d: t0, amt: e.carry, isIn, label: 'Em aberto de meses anteriores', late: true });
-      const left = isIn ? Math.max(0, e.amount - e.got) : e.paid ? 0 : e.amount;
-      if ((left > REC_TOL || e.unset) && diff <= 7) rows.push({ e, d, amt: left, isIn, unset: e.unset, label: diff < 0 ? (isIn ? 'Atrasado' : 'Atrasada') : diff === 0 ? 'Hoje' : diff === 1 ? 'Amanhã' : `Em ${diff} dias`, late: diff < 0 });
-      if (!isIn && diff <= 7) addOthers(e, d, false);
+      const d = dateOf(mo, e.day), diff = Math.round((d - t0) / 864e5);
+      if (e.it.kind === 'receivable' || e.paid || diff < 0 || diff > 7 || !(e.amount > REC_TOL || e.unset)) return;
+      rows.push({ e, d, label: diff === 0 ? 'Hoje' : diff === 1 ? 'Amanhã' : `Em ${diff} dias` });
     }));
+    if (!rows.length) return '';
     rows.sort((a, b) => a.d - b.d);
-    const out = rows.filter((r) => !r.isIn).reduce((n, r) => n + r.amt, 0), inn = rows.filter((r) => r.isIn).reduce((n, r) => n + r.amt, 0), shown = rows.slice(0, 6);
+    const out = rows.reduce((n, r) => n + r.e.amount, 0), shown = rows.slice(0, 6);
     return `<section class="card fin-glance" aria-label="Finanças">
       <div class="section-title"><span>Finanças</span><a class="link-btn" href="#/financas">Ver tudo</a></div>
-      ${rows.length ? `<p class="glance-cap">Próximos 7 dias e atrasados</p><div class="glance-sum"><span>A pagar <b>${money(out)}</b></span><span>A receber <b class="in">${money(inn)}</b></span></div>
-      ${shown.map((r) => { const k = FIN[r.e.it.kind]; return `<a class="glance-row" href="#/financas${r.e.it.kind === 'card' || r.e.it.kind === 'receivable' ? `/item/${r.e.it.id}` : ''}"><span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span><span class="fin-txt"><b>${esc(r.e.it.name)}</b><small class="${r.late || r.label.startsWith('Atrasa') ? 'late' : ''}">${esc(r.label)}${r.d >= t0 && !r.late ? ` · dia ${r.d.getDate()}` : ''}</small></span><span class="fin-amt ${r.isIn ? 'in' : ''}">${r.unset ? '<em>Informar valor</em>' : `${r.isIn ? '+' : ''}${money(r.amt)}`}</span></a>`; }).join('')}
-      ${rows.length > shown.length ? `<a class="glance-more" href="#/financas">Mais ${rows.length - shown.length}</a>` : ''}` : '<p class="glance-empty">Nada vence nos próximos 7 dias e nada está atrasado.</p>'}
+      <p class="glance-cap">Vencem nos próximos 7 dias</p><div class="glance-sum"><span>A pagar <b>${money(out)}</b></span></div>
+      ${shown.map((r) => { const k = FIN[r.e.it.kind]; return `<a class="glance-row" href="#/financas${r.e.it.kind === 'card' ? `/item/${r.e.it.id}` : ''}"><span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span><span class="fin-txt"><b>${esc(r.e.it.name)}</b><small>${r.label} · dia ${r.d.getDate()}</small></span><span class="fin-amt">${r.e.unset ? '<em>Informar valor</em>' : money(r.e.amount)}</span></a>`; }).join('')}
+      ${rows.length > shown.length ? `<a class="glance-more" href="#/financas">Mais ${rows.length - shown.length}</a>` : ''}
     </section>`;
   }
   function homeView() {
