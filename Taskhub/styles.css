@@ -873,6 +873,7 @@ html, body { overflow-x: clip; }
 @media (max-width: 860px) {
   .page-head:has(.fin-month) { flex-direction: column; align-items: stretch; }
   .fin-month { align-self: flex-start; }
+  .page-head:has(.fin-month) .fin-head-tools { justify-content: space-between; }
   .fin-card { flex-basis: 78%; }
   .fin-card b { font-size: 24px; }
   .fin-charts { grid-template-columns: 1fr; }
@@ -1011,5 +1012,21 @@ a.fin-main, a.fin-tile, a.fin-back { color: inherit; text-decoration: none; }
   .fin-card b { font-size: 22px; }
 }
 @media (min-width: 861px) and (max-width: 1180px) { .fin-sum { scrollbar-width: thin; } .tools { flex-wrap: wrap; max-width: 100%; } }
+/* ocultar valores */
+.fin-head-tools, .glance-actions { display: flex; align-items: center; gap: 8px; }
+.fin-glance .fin-eye { margin-block: -6px; }
+/* gráfico dos próximos meses: texto legível em qualquer largura */
+.fin-year { container-type: inline-size; }
+.fin-year-list { display: none; gap: 10px; }
+.fy-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; color: var(--text-2); }
+.fy-row.on { color: var(--text); font-weight: 650; }
+.fy-month { text-transform: capitalize; white-space: nowrap; }
+.fy-val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fy-track { position: relative; height: 12px; border-bottom: 1px solid var(--border-strong); }
+.fy-bar { display: flex; gap: 2px; height: 10px; overflow: hidden; }
+.fy-bar i { display: block; border-radius: 3px; }
+.fy-track u { position: absolute; top: -3px; bottom: -1px; margin-left: -2px; border-left: 2.5px dotted var(--text); }
+@container (max-width: 560px) { .fin-year .fin-ax, .fin-year .fin-val { font-size: 15px; } }
+@container (max-width: 410px) { .fin-year .fin-svg { display: none; } .fin-year-list { display: grid; } }
 /* barras de progresso no claro: preenchimento com mais contraste */
 :root[data-theme="light"] .progress i, :root[data-theme="light"] .cl-progress i { background: var(--accent-text); }

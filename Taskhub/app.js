@@ -85,6 +85,8 @@
     card: '<rect x="3" y="5.5" width="18" height="13" rx="3"/><path d="M3 10h18M7 15h3"/>',
     coin: '<circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.2c-.6-.7-1.5-1-2.5-1-1.4 0-2.5.7-2.5 1.8 0 2.3 5 1.1 5 3.4 0 1.1-1.1 1.8-2.5 1.8-1.1 0-2-.4-2.6-1.1M12 6.5v1.7M12 15.8v1.7"/>',
     chevL: '<path d="m15 6-6 6 6 6"/>',
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="M4 4l16 16M9.9 5.8a9.8 9.8 0 0 1 2.1-.3c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.7 3.4M6.4 7.4A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9.5 9.5 0 0 0 3.6-.7M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
   };
   const icon = (n, s = 18) =>
@@ -121,6 +123,7 @@
   /* ---------- estado ---------- */
   const S = {
     projects: [], tasks: [], activity: [], milestones: [], water: [], finItems: [], finPays: [], finLines: [], finRecs: [], finTab: 'month', finF: { q: '', type: 'all', status: 'all', sort: 'due' }, finMonth: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })(), user: null, loading: true, loadError: false,
+    hideValues: (() => { try { return localStorage.getItem('taskhub:hidevalues') === '1'; } catch (e) { return false; } })(),
     heatDay: null, justDone: null, waterEdit: false, heatFull: false, filtersOpen: false, boardTab: 'todo',
     sort: (() => { try { const v = localStorage.getItem('taskhub:sort'); return SORTS[v] ? v : 'priority'; } catch (e) { return 'priority'; } })(),
     route: { view: 'home' },
@@ -1057,7 +1060,7 @@
     rows.sort((a, b) => a.d - b.d);
     const out = rows.reduce((n, r) => n + r.e.amount, 0), shown = rows.slice(0, 6);
     return `<section class="card fin-glance" aria-label="Finanças">
-      <div class="section-title"><span>Finanças</span><a class="link-btn" href="#/financas">Ver tudo</a></div>
+      <div class="section-title"><span>Finanças</span><span class="glance-actions">${finEye()}<a class="link-btn" href="#/financas">Ver tudo</a></span></div>
       <p class="glance-cap">Vencem nos próximos 7 dias</p><div class="glance-sum"><span>A pagar <b>${money(out)}</b></span></div>
       ${shown.map((r) => { const k = FIN[r.e.it.kind]; return `<a class="glance-row" href="#/financas${r.e.it.kind === 'card' ? `/item/${r.e.it.id}` : ''}"><span class="fin-ico" style="--c:${k.col}">${icon(k.ico, 16)}</span><span class="fin-txt"><b>${esc(r.e.it.name)}</b><small>${r.label} · dia ${r.d.getDate()}</small></span><span class="fin-amt">${r.e.unset ? '<em>Informar valor</em>' : money(r.e.amount)}</span></a>`; }).join('')}
       ${rows.length > shown.length ? `<a class="glance-more" href="#/financas">Mais ${rows.length - shown.length}</a>` : ''}
@@ -1714,6 +1717,13 @@
       }
       case 'fin-month': S.finMonth = addMonths(S.finMonth, parseInt(el.dataset.value, 10) || 0); render(); break;
       case 'fin-new-sheet': finKindSheet(); break;
+      case 'fin-hide': {
+        S.hideValues = !S.hideValues;
+        try { localStorage.setItem('taskhub:hidevalues', S.hideValues ? '1' : '0'); } catch (err) {}
+        render();
+        const b = document.querySelector('.fin-eye'); if (b) b.focus({ preventScroll: true });
+        break;
+      }
       case 'fin-new': finDialog(el.dataset.value, null); break;
       case 'fin-edit': { const it = finItem(el.dataset.id); if (it) finDialog(null, it); break; }
       case 'fin-pay': finPayDialog(el.dataset.id, el.dataset.month); break;
@@ -1738,21 +1748,16 @@
       case 'fin-line-delete': {
         const l = S.finLines.find((x) => x.id === el.dataset.id);
         if (!l) break;
-        if (!confirm(`Excluir "${l.name}" e os recebimentos dele?`)) break;
-        S.finLines = S.finLines.filter((x) => x.id !== l.id);
-        S.finRecs = S.finRecs.filter((x) => x.line_id !== l.id);
-        removeRow('finance_lines', l.id);
-        closeOverlay(); render(); toast('Excluído');
+        finRemove('Lançamento excluído', 'finance_lines', l.id, { finLines: (x) => x.id === l.id, finRecs: (x) => x.line_id === l.id });
+        closeOverlay(); render();
         break;
       }
       case 'fin-rec-new': finRecDialog(el.dataset.id, el.dataset.month, el.dataset.line || null, el.dataset.person || null); break;
       case 'fin-rec-del': {
         const r = S.finRecs.find((x) => x.id === el.dataset.id);
         if (!r) break;
-        if (!confirm(`Remover o recebimento de ${money(r.amount)}${r.received_on ? ` de ${dmy(r.received_on)}` : ''}?`)) break;
-        S.finRecs = S.finRecs.filter((x) => x.id !== r.id);
-        removeRow('finance_receipts', r.id);
-        render(); toast('Removido');
+        finRemove('Recebimento removido', 'finance_receipts', r.id, { finRecs: (x) => x.id === r.id });
+        render();
         break;
       }
       case 'fin-toggle': finToggle(el.dataset.id, el.dataset.month); break;
@@ -1769,15 +1774,10 @@
       case 'fin-delete': {
         const it = finItem(el.dataset.id);
         if (!it) break;
-        if (!confirm(`Excluir "${it.name}" e todo o histórico dele?`)) break;
-        S.finItems = S.finItems.filter((x) => x.id !== it.id);
-        S.finPays = S.finPays.filter((x) => x.item_id !== it.id);
-        S.finLines = S.finLines.filter((x) => x.item_id !== it.id);
-        S.finRecs = S.finRecs.filter((x) => x.item_id !== it.id);
-        removeRow('finance_items', it.id);
+        const mine = (x) => x.item_id === it.id;
+        finRemove('Item excluído', 'finance_items', it.id, { finItems: (x) => x.id === it.id, finPays: mine, finLines: mine, finRecs: mine });
         closeOverlay();
         if (S.route.item === it.id) location.hash = '#/financas'; else render();
-        toast('Excluído');
         break;
       }
       case 'water-edit': S.waterEdit = !S.waterEdit; render(); break;
@@ -2221,8 +2221,9 @@
   };
   const OUT_KINDS = ['bill', 'card', 'debt'];
   const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-  const money = (n) => BRL.format(Number(n) || 0);
-  const moneyShort = (n) => (n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(Math.round(n)));
+  const money = (n) => (S.hideValues ? 'R$ ••••' : BRL.format(Number(n) || 0));
+  const finEye = () => { const t = S.hideValues ? 'Mostrar valores' : 'Ocultar valores'; return `<button type="button" class="icon-btn fin-eye" data-action="fin-hide" aria-label="${t}" title="${t}">${icon(S.hideValues ? 'eyeOff' : 'eye', 18)}</button>`; };
+  const moneyShort = (n) => (S.hideValues ? '••••' : n >= 1000 ? `${(n / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil` : String(Math.round(n)));
   function parseMoney(v) {
     let s = String(v == null ? '' : v).replace(/[^\d.,-]/g, '');
     if (!s) return null;
@@ -2378,6 +2379,14 @@
     });
     return T;
   }
+  // Previsto no fim do mês: saldo atual + o que falta entrar − o que falta pagar, do mês atual até o mês escolhido.
+  function finForecast(m, saldo) {
+    const cur = monthKey(new Date());
+    if (m < cur) return null;
+    let v = saldo;
+    for (let k = cur; k <= m; k = addMonths(k, 1)) { const T = finTotals(finMonthList(k)); v += (T.inn - T.gotIn) - (T.out - T.paidOut); }
+    return round2(v);
+  }
   function finStatus(e) {
     if (e.paid) return 'paid';
     if (e.overdue) return 'late';
@@ -2391,6 +2400,15 @@
     if (!p) { p = { id: detUUID(`fin:${it.id}:${m}`), item_id: it.id, month: m, amount: null, paid: false, paid_at: null }; S.finPays.push(p); }
     Object.assign(p, patch);
     persist('finance_payments', p);
+  }
+  // Some da tela na hora; só apaga no banco quando o aviso com "Desfazer" termina.
+  function finRemove(text, table, id, drop) {
+    const saved = Object.keys(drop).map((key) => [key, S[key].map((x, i) => [i, x]).filter(([, x]) => drop[key](x))]);
+    Object.keys(drop).forEach((key) => { S[key] = S[key].filter((x) => !drop[key](x)); });
+    undoable(text, () => {
+      saved.forEach(([key, rows]) => rows.forEach(([i, x]) => { if (!S[key].some((y) => y.id === x.id)) S[key].splice(Math.min(i, S[key].length), 0, x); }));
+      render();
+    }, () => removeRow(table, id));
   }
   function finToggle(id, month) {
     const it = finItem(id), m = month || S.finMonth;
@@ -2429,11 +2447,18 @@
       if (d.T.inn) g += `<path d="M${(x - 6).toFixed(1)} ${y(d.T.inn).toFixed(1)}h${bw + 12}" stroke="var(--text)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="1 5"><title>${monthLabel(d.m, true)} · A receber: ${money(d.T.inn)}</title></path>`;
       const sel = d.m === S.finMonth;
       g += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="fin-ax ${sel ? 'on' : ''}">${esc(monthLabel(d.m, true))}</text>`;
-      if (d.T.out) g += `<text x="${(x + bw / 2).toFixed(1)}" y="${(y(d.T.out) - 6).toFixed(1)}" text-anchor="middle" class="fin-val ${sel ? 'on' : ''}">${moneyShort(d.T.out)}</text>`;
+      if (d.T.out) {
+        let ty = y(d.T.out) - 6;
+        const yi = d.T.inn ? y(d.T.inn) : null; // se a linha "a receber" passa sobre o valor, ele sobe
+        if (yi !== null && yi < y(d.T.out) + 3 && yi > ty - 18) ty = yi - 7;
+        g += `<text x="${(x + bw / 2).toFixed(1)}" y="${ty.toFixed(1)}" text-anchor="middle" class="fin-val ${sel ? 'on' : ''}">${moneyShort(d.T.out)}</text>`;
+      }
     });
     const base = `<path d="M${pl} ${H - bot}H${W - pl}" class="fin-base"/>`;
     const sr = `<table class="sr-only"><caption>Gastos e valores a receber por mês</caption><tr><th>Mês</th><th>Gastos</th><th>A receber</th></tr>${data.map((d) => `<tr><td>${monthLabel(d.m)}</td><td>${money(d.T.out)}</td><td>${money(d.T.inn)}</td></tr>`).join('')}</table>`;
-    return `<svg class="fin-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gastos por mês, de ${monthLabel(data[0].m)} a ${monthLabel(data[5].m)}">${base}${g}</svg>${sr}
+    const pct = (v) => ((v / max) * 100).toFixed(2);
+    const list = `<div class="fin-year-list" aria-hidden="true">${data.map((d) => `<div class="fy-row ${d.m === S.finMonth ? 'on' : ''}"><span class="fy-month">${esc(monthLabel(d.m, true))}</span><span class="fy-track"><span class="fy-bar">${OUT_KINDS.map((k) => (d.T.byKind[k] ? `<i style="width:${pct(d.T.byKind[k])}%;background:${FIN[k].col}"></i>` : '')).join('')}</span>${d.T.inn ? `<u style="left:${pct(d.T.inn)}%"></u>` : ''}</span><span class="fy-val">${money(d.T.out)}</span></div>`).join('')}</div>`;
+    return `<div class="fin-year"><svg class="fin-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Gastos por mês, de ${monthLabel(data[0].m)} a ${monthLabel(data[5].m)}">${base}${g}</svg>${list}</div>${sr}
       <ul class="fin-legend inline">${OUT_KINDS.map((k) => `<li><span class="sw" style="background:${FIN[k].col}"></span>${FIN[k].plural}</li>`).join('')}<li><span class="tick"></span>A receber</li></ul>`;
   }
 
@@ -2523,12 +2548,13 @@
     const toPay = T.out - T.paidOut, toGet = T.inn - T.gotIn, pct = finPct(T.paidOut, T.out);
     let body = '';
     if (tab === 'month') {
+      const fc = finForecast(m, saldo), curKey = monthKey(new Date());
       body = `<div class="fin-sum" role="list">
         ${finCard('hero', 'A pagar no mês', money(toPay), `${pct}% pago de ${money(T.out)}`)}
         ${finCard('', 'A receber', money(toGet), `de ${money(T.inn)} no mês`)}
         ${finCard('', 'Saldo em contas', money(saldo), plural(accts.length, 'conta', 'contas'))}
         ${finCard('', 'Guardado', money(saved), savs.length ? plural(savs.length, 'reserva', 'reservas') : 'Nada cadastrado')}
-        ${finCard('', 'Previsto no fim do mês', money(saldo + toGet - toPay), 'saldo + a receber − a pagar')}
+        ${finCard('', 'Previsto no fim do mês', fc === null ? '—' : money(fc), fc === null ? 'só do mês atual em diante' : m === curKey ? 'saldo + a receber − a pagar' : `acumulado desde ${monthLabel(curKey).split(' de ')[0]}`)}
       </div>${finBar(pct, 'Contas pagas no mês')}
       <div class="grid-2 fin-charts">
         <section class="card"><h2>Gastos do mês <small>${money(T.out)}</small></h2>${finChartMonth(T)}</section>
@@ -2553,13 +2579,13 @@
       <div class="section-title"><span>Dinheiro guardado</span><button type="button" class="btn sm" data-action="fin-new" data-value="saving">${icon('plus', 16)}Adicionar</button></div>
       ${finAcctList(savs, 'coin', 'var(--fin-4)', 'Guardado', 'in') || '<div class="card empty sm"><p>Registre aqui o que você já guardou: reserva, investimentos, cofrinho.</p></div>'}`;
     }
-    return `<div class="page-head"><div><h1>Finanças</h1><p class="sub">Contas, cartões, dívidas e o que você tem a receber.</p></div>${tab === 'month' || tab === 'cards' ? finMonthNav() : ''}</div>
+    return `<div class="page-head"><div><h1>Finanças</h1><p class="sub">Contas, cartões, dívidas e o que você tem a receber.</p></div><div class="fin-head-tools">${tab === 'month' || tab === 'cards' ? finMonthNav() : ''}${finEye()}</div></div>
       ${finTabs()}${body}`;
   }
 
   /* ---------- detalhe de cartão / a receber (rota #/financas/item/:id) ---------- */
   function finBack(it) {
-    return `<div class="fin-bar-top"><a class="fin-back" href="#/financas">${icon('chevL', 16)}Finanças</a><button type="button" class="btn sm" data-action="fin-edit" data-id="${it.id}">${icon('edit', 15)}Editar cadastro</button></div>`;
+    return `<div class="fin-bar-top"><a class="fin-back" href="#/financas">${icon('chevL', 16)}Finanças</a><span class="fin-head-tools">${finEye()}<button type="button" class="btn sm" data-action="fin-edit" data-id="${it.id}">${icon('edit', 15)}Editar cadastro</button></span></div>`;
   }
   function finRecList(list) {
     if (!list.length) return '';
