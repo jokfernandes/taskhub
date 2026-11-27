@@ -87,7 +87,8 @@
     chevL: '<path d="m15 6-6 6 6 6"/>',
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M4 4l16 16M9.9 5.8a9.8 9.8 0 0 1 2.1-.3c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.7 3.4M6.4 7.4A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9.5 9.5 0 0 0 3.6-.7M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
-    expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
+    expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'
   };
   const icon = (n, s = 18) =>
     `<svg class="ico" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[n]}</svg>`;
@@ -99,6 +100,7 @@
   const normPrio = (v) => clamp(Math.round(typeof v === 'number' ? v : ({ low: 1, medium: 3, high: 5 }[v] || parseInt(v, 10) || 3)), 1, 5);
   const PRIO = { 1: 'Muito baixa', 2: 'Baixa', 3: 'Média', 4: 'Alta', 5: 'Muito alta' };
   const prioTag = (p) => `<span class="prio p${p}" title="Prioridade ${p} de 5">${PRIO[p]}</span>`;
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || '');
   const lastGrapheme = (s) => {
     s = String(s || '').trim();
     const a = window.Intl && Intl.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map((x) => x.segment) : Array.from(s);
@@ -117,7 +119,8 @@
     play: { verb: 'retomou', icon: 'play' },
     pause: { verb: 'pausou', icon: 'pause' },
     recurring: { verb: 'criou a recorrência', icon: 'repeat' },
-    recurred: { verb: 'gerou', icon: 'repeat' }
+    recurred: { verb: 'gerou', icon: 'repeat' },
+    moved: { verb: 'moveu', icon: 'folder' }
   };
 
   /* ---------- estado ---------- */
@@ -327,6 +330,30 @@
     render();
   }
 
+  // Muda a tarefa de projeto: número novo no destino, sem marco; o histórico dela vai junto.
+  let moveQueue = Promise.resolve(); // grava na ordem, mesmo se "Desfazer" vier antes de a rede responder
+  function moveToProject(t, projectId) {
+    const to = getProject(projectId);
+    if (!to || to.id === t.project_id) return;
+    const prev = { project_id: t.project_id, number: t.number, milestone_id: t.milestone_id, position: t.position };
+    if (!t.recurrence) to.task_counter = (to.task_counter || 0) + 1;
+    const place = (patch, projectSaved) => {
+      Object.assign(t, patch, { updated_at: nowISO() });
+      S.activity.forEach((a) => { if (a.task_id === t.id) a.project_id = t.project_id; });
+      const id = t.id, pid = t.project_id;
+      moveQueue = moveQueue.then(() => projectSaved)
+        .then(() => persist('tasks', t))
+        .then(() => Store.moveHistory(id, pid))
+        .catch((e) => { console.error(e); toast('Não salvou o histórico. Confira a conexão.', 'error'); });
+    };
+    place({ project_id: to.id, number: t.recurrence ? t.number : to.task_counter, milestone_id: null, position: Date.now() }, t.recurrence ? null : persist('projects', to));
+    undoable(`Movida para ${to.name.length > 22 ? `${to.name.slice(0, 21).trim()}…` : to.name}`, () => {
+      if (getTask(t.id) !== t || t.project_id !== to.id || !getProject(prev.project_id)) return;
+      place({ ...prev, milestone_id: S.milestones.some((m) => m.id === prev.milestone_id) ? prev.milestone_id : null });
+      render(); refreshDrawer();
+    }, () => { if (getTask(t.id) === t && t.project_id === to.id) logActivity('moved', `${t.title} para ${to.name}`, to.id, t.id); });
+  }
+
   /* ---------- cronômetro das tarefas ---------- */
   const elapsed = (t) => (t.time_spent || 0) + (t.timer_started_at ? Math.max(0, (Date.now() - Date.parse(t.timer_started_at)) / 1000) : 0);
   function stopTimer(t, silent) {
@@ -431,7 +458,7 @@
   function milestonesBlock(p) {
     const ms = projMilestones(p.id);
     const today = ymd(new Date());
-    return `<div class="ms-box"><div class="ms-head"><span class="section-label">Marcos</span><button class="btn ghost" data-action="new-milestone" data-id="${p.id}">${icon('plus', 15)}Marco</button></div>
+    return `<div class="ms-box ${ms.length ? '' : 'none'}" role="group" aria-label="Marcos"><div class="ms-head"><span class="section-label">Marcos</span><button class="btn ghost" data-action="new-milestone" data-id="${p.id}">${icon('plus', 15)}Marco</button></div>
       ${ms.length ? `<div class="ms-list">${ms.map((m) => {
         const s = msStats(m);
         const late = m.due_date && m.due_date < today && s.pct < 100;
@@ -1009,6 +1036,7 @@
       <div class="brand-row"><a class="brand" href="#/"><span class="logo">${icon('check', 16)}</span>${esc(APP_NAME)}</a>
         <button class="icon-btn" data-action="theme" aria-label="${dark ? 'Tema claro' : 'Tema escuro'}">${icon(dark ? 'sun' : 'moon', 17)}</button></div>
       <nav>
+        <button type="button" class="nav-item" data-action="search"><span class="nav-ico">${icon('search')}</span><span class="grow">Buscar</span><kbd class="kbd">${IS_MAC ? '⌘K' : 'Ctrl K'}</kbd></button>
         <a class="nav-item ${v === 'home' ? 'active' : ''}" href="#/"><span class="nav-ico">${icon('home')}</span><span class="grow">Visão geral</span></a>
         <a class="nav-item ${v === 'pomodoro' ? 'active' : ''}" href="#/pomodoro"><span class="nav-ico">${icon('timer')}</span><span class="grow">Pomodoro</span>${PM.running ? '<span class="count" aria-label="em andamento">●</span>' : ''}</a>
         <a class="nav-item ${v === 'finance' ? 'active' : ''}" href="#/financas"><span class="nav-ico">${icon('wallet')}</span><span class="grow">Finanças</span></a>
@@ -1066,6 +1094,20 @@
       ${rows.length > shown.length ? `<a class="glance-more" href="#/financas">Mais ${rows.length - shown.length}</a>` : ''}
     </section>`;
   }
+  // Blocos que podem ser ocultados na visão geral (preferência salva neste aparelho)
+  const HOME_BLOCKS = [['water', 'Água'], ['fin', 'Finanças'], ['heat', 'Contribuições']];
+  const homeHidden = () => { try { const v = JSON.parse(localStorage.getItem('taskhub:home') || '[]'); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
+  const saveHomeHidden = (v) => { try { localStorage.setItem('taskhub:home', JSON.stringify(v)); } catch (e) {} };
+  function homePrefsDialog() {
+    const off = homeHidden();
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="Personalizar visão geral">
+      <h2>Personalizar visão geral</h2>
+      <div class="opt-list">${HOME_BLOCKS.map(([k, l]) => `<label class="opt"><span>${l}</span><input type="checkbox" data-home="${k}" ${off.includes(k) ? '' : 'checked'}></label>`).join('')}</div>
+      <div class="note">Desmarque o que não quer ver. Vale só neste aparelho.</div>
+      <div class="acts"><span></span><div class="r"><button type="button" class="btn primary" data-action="close-overlay">Pronto</button></div></div>
+    </div></div>`;
+  }
   function homeView() {
     if (!S.projects.length) {
       return `<div class="empty">
@@ -1085,6 +1127,7 @@
     weekStart.setDate(weekStart.getDate() - 6);
     const doneWeek = all.filter((t) => t.status === 'done' && t.completed_at && new Date(t.completed_at) >= weekStart);
     const hm = heatmap();
+    const off = homeHidden();
     const st = streak();
     const h = new Date().getHours();
     const greet = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
@@ -1092,19 +1135,20 @@
     const deadlines = open.filter((t) => t.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 6);
     return `
       <div class="page-head"><div><h1>${greet}</h1><p class="sub">${date}</p></div>
-        <button class="btn primary" data-action="focus-quick">${icon('plus', 16)}Nova tarefa</button></div>
+        <div class="ph-acts"><button type="button" class="icon-btn" data-action="home-prefs" aria-label="Personalizar visão geral" title="Personalizar visão geral">${icon('sliders', 18)}</button>
+          <button class="btn primary" data-action="focus-quick">${icon('plus', 16)}Nova tarefa</button></div></div>
       ${todayBlock(all, doing)}
-      ${finGlance()}
+      <h2 class="section-title">Projetos</h2>
+      <div class="proj-grid home-proj">${S.projects.map(projCard).join('')}</div>
+      ${off.includes('fin') ? '' : finGlance()}
       <div class="stats">
         <div class="stat hero"><b>${open.length}</b><span>${open.length === 1 ? 'tarefa aberta' : 'tarefas abertas'}</span></div>
         <div class="stat"><b>${doing.length}</b><span>em andamento</span></div>
         <div class="stat"><b>${doneWeek.length}</b><span>concluídas em 7 dias</span></div>
         <div class="stat"><b>${st}</b><span>${st === 0 ? 'Conclua uma tarefa para começar a sequência' : st === 1 ? 'dia seguido' : 'dias seguidos'}</span></div>
       </div>
-      ${waterCard()}
-      <section class="card"><h2>Contribuições <small>${plural(hm.total, 'tarefa concluída', 'tarefas concluídas')} nos últimos ${hm.weeks === 13 ? '3' : '9'} meses</small></h2>${hm.html}${hm.small ? `<button type="button" class="link-btn heat-more" data-action="heat-more">${S.heatFull ? 'Ver menos' : 'Ver mais meses'}</button>` : ''}${heatDayList()}</section>
-      <h2 class="section-title">Projetos</h2>
-      <div class="proj-grid">${S.projects.map(projCard).join('')}</div>
+      ${off.includes('water') ? '' : waterCard()}
+      ${off.includes('heat') ? '' : `<section class="card"><h2>Contribuições <small>${plural(hm.total, 'tarefa concluída', 'tarefas concluídas')} nos últimos ${hm.weeks === 13 ? '3' : '9'} meses</small></h2>${hm.html}${hm.small ? `<button type="button" class="link-btn heat-more" data-action="heat-more">${S.heatFull ? 'Ver menos' : 'Ver mais meses'}</button>` : ''}${heatDayList()}</section>`}
       <div class="grid-2">
         <section class="card"><h2>Próximos prazos</h2>
           ${deadlines.length
@@ -1146,7 +1190,7 @@
       ? ts.filter((t) => t.status === 'done').sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))
       : ts.filter((t) => t.status === s).sort(sorter)]);
     const hasAny = S.tasks.some((t) => t.project_id === p.id);
-    if (!hasAny) return `<div class="empty sm"><p>Este projeto ainda não tem tarefas. Escreva a primeira no campo acima e pressione Enter.</p></div>`;
+    if (!hasAny) return `<div class="empty sm"><p>Este projeto ainda não tem tarefas. <span class="only-wide">Escreva a primeira no campo acima e pressione Enter.</span><span class="only-narrow">Toque no botão + para criar a primeira.</span></p></div>`;
     let html = groups.map(([status, items]) => {
       if (!items.length) return '';
       if (status === 'done') {
@@ -1178,9 +1222,10 @@
     const tab = S.route.tab;
     const tabLink = (id, label, ic) => `<a href="#/p/${p.id}${id === 'list' ? '' : '/' + id}" class="${tab === id ? 'on' : ''}">${icon(ic, 15)}${label}</a>`;
     return `
-      <div class="page-head">
+      <div class="page-head proj-head">
         <div class="ph-main"><div class="emoji-lg">${esc(p.emoji)}</div><div style="min-width:0"><h1>${esc(p.name)}</h1>${p.description ? `<p class="sub">${esc(p.description)}</p>` : ''}</div></div>
-        <button class="btn ghost" data-action="edit-project" data-id="${p.id}">${icon('edit', 16)}Editar</button>
+        <button class="btn ghost only-wide" data-action="edit-project" data-id="${p.id}">${icon('edit', 16)}Editar</button>
+        <div class="ph-acts only-narrow"><button type="button" class="icon-btn" data-action="edit-project" data-id="${p.id}" aria-label="Editar projeto">${icon('edit', 18)}</button><button type="button" class="icon-btn" data-action="project-menu" data-id="${p.id}" aria-label="Mais ações do projeto">${icon('more', 20)}</button></div>
       </div>
       <div class="progress-row"><div class="progress"><i style="width:${pct}%"></i></div><span>${done} de ${ts.length} concluídas</span></div>
       ${tab !== 'activity' ? milestonesBlock(p) : ''}
@@ -1269,9 +1314,33 @@
     overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="Opções da tarefa" data-task="${t.id}">
       <div class="sheet-title">${esc(t.title)}</div>
       <label class="nav-item"><span class="nav-ico">${icon('calendar')}</span><span class="grow">Prazo</span><input class="input" type="date" id="sheet-due" value="${esc(t.due_date || '')}" aria-label="Prazo"></label>
-      <div class="sheet-sub">Mover para…</div>
+      <div class="sheet-sub">Mudar status para…</div>
       ${Object.keys(STATUS).filter((k) => k !== t.status).map((k) => `<button type="button" class="nav-item" data-action="move-to" data-id="${t.id}" data-value="${k}"><span class="grow">${STATUS[k]}</span></button>`).join('')}
+      ${S.projects.length > 1 ? `<button type="button" class="nav-item" data-action="move-project-sheet" data-id="${t.id}">${icon('folder')}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
       <button type="button" class="nav-item danger" data-action="sheet-delete" data-id="${t.id}">${icon('trash')}<span class="grow">Excluir</span></button>
+    </div></div>`;
+  }
+
+  const projectChoices = (t) => S.projects.filter((p) => p.id !== t.project_id)
+    .map((p) => `<button type="button" class="nav-item" data-action="move-project" data-id="${t.id}" data-value="${p.id}"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span></button>`).join('');
+  function moveSheet(id) {
+    const t = getTask(id);
+    if (!t) return;
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="Mover para outro projeto">
+      <div class="sheet-title">Mover para outro projeto</div>
+      <div class="sheet-sub">A tarefa recebe um número novo e sai do marco.</div>
+      ${projectChoices(t)}
+    </div></div>`;
+  }
+  function projectSheet(id) {
+    const p = getProject(id);
+    if (!p) return;
+    blurIn(overlay);
+    overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="Ações do projeto">
+      <div class="sheet-title">${esc(p.name)}</div>
+      <button type="button" class="nav-item" data-action="new-milestone" data-id="${p.id}">${icon('plus')}<span class="grow">Novo marco</span></button>
+      <button type="button" class="nav-item" data-action="new-recurring" data-id="${p.id}">${icon('repeat')}<span class="grow">Nova tarefa recorrente</span></button>
     </div></div>`;
   }
 
@@ -1281,7 +1350,7 @@
   function fabBtn() {
     const v = S.route.view;
     const show = v === 'home' || (v === 'project' && S.route.tab !== 'activity');
-    return show && S.projects.length ? `<button type="button" class="fab" data-action="new-task-sheet" aria-label="Nova tarefa">${icon('plus', 20)}<span>Nova tarefa</span></button>` : '';
+    return show && S.projects.length ? `<button type="button" class="fab ${v === 'project' ? 'round' : ''}" data-action="new-task-sheet" aria-label="Nova tarefa">${icon('plus', 20)}<span>Nova tarefa</span></button>` : '';
   }
   function newTaskSheet() {
     if (!S.projects.length) { projectDialog(null); return; }
@@ -1298,6 +1367,7 @@
         </div>
         ${quickDue('')}
         <button class="btn primary block" type="submit">Criar tarefa</button>
+        <button type="button" class="btn ghost block" data-action="sheet-recurring">${icon('repeat', 15)}Tornar recorrente</button>
       </form></div></div>`;
     setTimeout(() => { const i = document.getElementById('sa-title'); if (i) i.focus(); }, 60);
   }
@@ -1327,7 +1397,7 @@
     baseTitle = title === APP_NAME ? APP_NAME : `${title} · ${APP_NAME}`;
     setDocTitle(baseTitle);
     blurIn(app); app.innerHTML = `<div class="shell">${sidebar()}<main class="main">
-      <header class="topbar"><span class="logo">${icon('check', 13)}</span><span>${esc(title)}</span></header>
+      <header class="topbar"><span class="logo">${icon('check', 13)}</span><span class="tb-title">${esc(title)}</span><button type="button" class="icon-btn tb-search" data-action="search" aria-label="Buscar em tarefas e finanças">${icon('search', 19)}</button></header>
       <div class="view">${view}</div></main>${tabbar()}${fabBtn()}</div>`;
 
     updFab();
@@ -1420,7 +1490,20 @@
       <div class="link-add"><input class="input" id="d-link-title" placeholder="Título (opcional)" aria-label="Título do link"><input class="input" id="d-link-url" placeholder="Cole o link e Enter" aria-label="Endereço do link"></div>`;
     return `<aside class="drawer" role="dialog" aria-label="${tpl ? 'Tarefa recorrente' : 'Tarefa'}">
       <div class="drawer-head"><span>${esc(p.emoji)} ${esc(p.name)} · ${tpl ? 'Recorrente' : 'Tarefa'}</span>
-        <span>${!tpl ? `<button class="icon-btn" data-action="dup-task" aria-label="Duplicar tarefa">${icon('copy', 17)}</button><button class="icon-btn" data-action="to-recurring" aria-label="Tornar recorrente">${icon('repeat', 17)}</button>` : ''}<button class="icon-btn" data-action="delete-task" aria-label="Excluir tarefa">${icon('trash', 17)}</button><button class="icon-btn" data-action="close-overlay" aria-label="Fechar">${icon('x', 17)}</button></span></div>
+        <span><span class="d-menu-wrap"><button type="button" class="icon-btn" data-action="d-menu" aria-label="Mais ações" aria-expanded="false" aria-controls="d-menu">${icon('more', 20)}</button>
+          <div class="d-menu" id="d-menu" hidden>
+            <div data-pane="main">
+              ${!tpl ? `<button type="button" class="nav-item" data-action="dup-task">${icon('copy', 17)}<span class="grow">Duplicar tarefa</span></button>
+              <button type="button" class="nav-item" data-action="to-recurring">${icon('repeat', 17)}<span class="grow">Tornar recorrente</span></button>` : ''}
+              ${S.projects.length > 1 ? `<button type="button" class="nav-item" data-action="d-menu-pane" data-value="move">${icon('folder', 17)}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
+              <button type="button" class="nav-item danger" data-action="delete-task">${icon('trash', 17)}<span class="grow">${tpl ? 'Excluir recorrência' : 'Excluir tarefa'}</span></button>
+            </div>
+            <div data-pane="move" hidden>
+              <button type="button" class="nav-item" data-action="d-menu-pane" data-value="main">${icon('chevL', 17)}<span class="grow">Voltar</span></button>
+              <div class="d-menu-cap">${tpl ? 'Mover recorrência para…' : 'Mover para… (número novo, sem marco)'}</div>
+              ${projectChoices(t)}
+            </div>
+          </div></span><button type="button" class="icon-btn" data-action="close-overlay" aria-label="Fechar">${icon('x', 18)}</button></span></div>
       <div class="drawer-body">
         <input class="title-input" id="d-title" value="${esc(t.title)}" aria-label="Título">
         ${t.recur_source ? `<div class="note">${icon('repeat', 14)}Gerada automaticamente por uma tarefa recorrente</div>` : ''}
@@ -1440,6 +1523,18 @@
         ${sec('history', 'Histórico', hist.length || '', timeline(hist))}
       </div></aside>`;
   }
+  function setDrawerMenu(open, focus) {
+    const m = overlay.querySelector('#d-menu');
+    if (!m) return;
+    m.hidden = !open;
+    m.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== 'main'; });
+    const b = overlay.querySelector('[data-action="d-menu"]');
+    if (b) { b.setAttribute('aria-expanded', String(open)); if (focus) b.focus(); }
+  }
+  document.addEventListener('focusout', (e) => {
+    const w = e.target.closest && e.target.closest('.d-menu-wrap');
+    if (w && e.relatedTarget && !w.contains(e.relatedTarget)) setDrawerMenu(false);
+  });
   function openDrawer(id) {
     const t = getTask(id);
     if (!t) return;
@@ -1474,10 +1569,12 @@
     }
   }).observe(overlay, { childList: true });
   function restoreFocus() {
+    if (overlay.firstElementChild) return; // outra janela abriu no lugar: guarda a origem para depois
     const r = returnInfo;
     returnInfo = null;
-    if (!r || overlay.firstElementChild) return;
-    const el = r.el && r.el.isConnected ? r.el : r.action ? document.querySelector(r.id ? `[data-action="${r.action}"][data-id="${r.id}"]` : `[data-action="${r.action}"]`) : null;
+    if (!r) return;
+    const visible = (x) => x.getClientRects().length > 0;
+    const el = r.el && r.el.isConnected ? r.el : r.action ? [...document.querySelectorAll(r.id ? `[data-action="${r.action}"][data-id="${r.id}"]` : `[data-action="${r.action}"]`)].find(visible) : null;
     if (el && el.focus) { try { el.focus({ preventScroll: true }); } catch (err) {} }
   }
   function closeOverlay() { overlay.innerHTML = ''; drawerId = null; dlgRec = null; setTimeout(restoreFocus, 0); }
@@ -1506,17 +1603,69 @@
     dlgRec = { freq: 'daily', interval: 1, days: [new Date().getDay()], day: null, paused: false };
     blurIn(overlay); overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="Nova tarefa recorrente">
       <h2>Nova tarefa recorrente</h2>
-      <form data-form="recurring" data-id="${projectId}"><input type="hidden" name="from" value="${src ? src.id : ''}">
+      <form data-form="recurring" data-id="${projectId}"><input type="hidden" name="from" value="${(src && src.id) || ''}">
         <div class="field"><label for="rc-title">Título</label><input class="input" id="rc-title" name="title" value="${esc(src ? src.title : '')}" placeholder="Ex.: Revisar métricas da semana" required maxlength="120"></div>
         <div class="field"><span class="lbl">Frequência</span><div class="recur-box">${recurFields(dlgRec)}</div></div>
         <div class="split">
-          <div class="field"><label for="rc-start">Começa em</label><input class="input" type="date" id="rc-start" name="start" value="${ymd(new Date())}" required></div>
+          <div class="field"><label for="rc-start">Começa em</label><input class="input" type="date" id="rc-start" name="start" value="${(src && src.start) || ymd(new Date())}" required></div>
           <div class="field"><label for="rc-prio">Prioridade</label><select class="select" id="rc-prio" name="priority">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === (src ? src.priority : 3) ? 'selected' : ''}>${PRIO[k]}</option>`).join('')}</select></div>
         </div>
         <div class="note">A cada ocorrência o Taskhub cria uma tarefa nova neste projeto, sozinho.</div>
         <div class="acts"><span></span><div class="r"><button type="button" class="btn" data-action="close-overlay">Cancelar</button><button class="btn primary" type="submit">Criar recorrência</button></div></div>
       </form></div></div>`;
     setTimeout(() => { const i = document.getElementById('rc-title'); if (i) i.focus(); }, 30);
+  }
+
+  /* ---------- busca geral (Ctrl/Cmd + K) ---------- */
+  const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  function searchData(query) {
+    const words = fold(query).split(/\s+/).filter(Boolean);
+    const has = (text) => { const f = fold(text); return words.every((w) => f.includes(w)); };
+    if (!words.length) return null;
+    const tasks = S.tasks.filter((t) => getProject(t.project_id)
+      && has([t.title, t.description, ...t.labels, ...t.checklist.map((c) => c.text), ...(t.links || []).map((l) => l.title)].join(' ')))
+      .sort((a, b) => (a.status === 'done') - (b.status === 'done') || has(b.title) - has(a.title) || String(b.updated_at).localeCompare(String(a.updated_at)));
+    const fin = [];
+    S.finItems.forEach((it) => { if (has(it.name)) fin.push({ id: it.id, line: '', it, title: it.name, sub: FIN[it.kind].label }); });
+    S.finLines.forEach((l) => {
+      const it = finItem(l.item_id);
+      if (!it) return;
+      const people = [l.payer, ...(l.splits || []).map((s) => s.n)].filter(Boolean);
+      if (has([l.name, ...people].join(' '))) fin.push({ id: it.id, line: l.id, it, title: l.name, sub: [`Lançamento em ${it.name}`, [...new Set(people)].join(', ')].filter(Boolean).join(' · ') });
+    });
+    return { tasks, fin };
+  }
+  function searchResults(query) {
+    const r = searchData(query);
+    if (!r) return '<p class="search-hint">Digite para buscar em todos os projetos e em Finanças.</p>';
+    if (!r.tasks.length && !r.fin.length) return '<p class="search-hint">Nada encontrado. Tente outra palavra.</p>';
+    const row = (kind, id, line, ico, title, sub, done) => `<li><button type="button" class="search-row ${done ? 'done' : ''}" data-action="search-open" data-kind="${kind}" data-id="${id}" data-line="${line}"><span class="search-ico">${ico}</span><span class="fin-txt"><b>${esc(title)}</b><small>${esc(sub)}</small></span></button></li>`;
+    const group = (title, items, max, draw) => (items.length ? `<section><h3>${title} <small>${items.length}</small></h3><ul>${items.slice(0, max).map(draw).join('')}</ul>${items.length > max ? `<p class="search-hint">Mais ${items.length - max}. Digite mais para refinar.</p>` : ''}</section>` : '');
+    return group('Tarefas', r.tasks, 20, (t) => { const p = getProject(t.project_id); return row('task', t.id, '', esc(p.emoji), t.title, `${p.name} · ${t.recurrence ? 'Recorrente' : STATUS[t.status]}`, t.status === 'done'); })
+      + group('Finanças', r.fin, 12, (f) => row('fin', f.id, f.line, icon(FIN[f.it.kind].ico, 16), f.title, f.sub));
+  }
+  function searchDialog() {
+    blurIn(overlay); drawerId = null; dlgRec = null;
+    overlay.innerHTML = `<div class="overlay center search-bg" data-action="close-overlay-bg"><div class="dialog search-dialog" role="dialog" aria-modal="true" aria-label="Busca geral">
+      <div class="search-head"><label class="search">${icon('search', 17)}<input id="gs-q" type="search" placeholder="Buscar tarefa, conta ou pessoa" aria-label="Buscar em tarefas e finanças" autocomplete="off" enterkeyhint="search"></label>
+        <button type="button" class="icon-btn" data-action="close-overlay" aria-label="Fechar busca">${icon('x', 18)}</button></div>
+      <div class="search-results" id="gs-results" aria-live="polite">${searchResults('')}</div></div></div>`;
+    const i = document.getElementById('gs-q'); if (i) i.focus();
+  }
+  function openFound(kind, id, lineId) {
+    if (kind === 'task') { closeOverlay(); openDrawer(id); return; }
+    const it = finItem(id);
+    if (!it) return;
+    const cur = monthKey(new Date()), go = (hash) => { closeOverlay(); if (location.hash === hash) render(); else location.hash = hash; };
+    if (it.kind === 'card' || it.kind === 'receivable') {
+      // abre no mês em que o lançamento aparece
+      const l = lineId && S.finLines.find((x) => x.id === lineId);
+      let m = cur;
+      if (l && l.start_month && !finLineOcc(l, cur)) m = l.start_month > cur ? l.start_month : addMonths(l.start_month, (l.installments || 1) - 1);
+      S.finMonth = m; go(`#/financas/item/${it.id}`);
+    } else if (it.kind === 'account' || it.kind === 'saving') { S.finTab = 'savings'; go('#/financas'); }
+    else if (finOcc(it, cur)) { S.finMonth = cur; S.finTab = 'month'; S.finF = { q: it.name, type: 'all', status: 'all', sort: S.finF.sort }; go('#/financas'); }
+    else { closeOverlay(); finDialog(null, it); }
   }
 
   /* ---------- toasts ---------- */
@@ -1593,9 +1742,13 @@
 
   document.addEventListener('click', (e) => {
     if (Date.now() - lastSwipe < 450) return;
+    if (overlay.querySelector('#d-menu:not([hidden])') && !e.target.closest('.d-menu-wrap')) {
+      setDrawerMenu(false);
+      if (e.target.matches('[data-action="close-overlay-bg"]')) return; // o primeiro toque fora só fecha o menu
+    }
     const el = e.target.closest('[data-action]');
     if (!el) return;
-    if (el.closest('.sheet') && !['appearance', 'new-project', 'quick-due'].includes(el.dataset.action)) closeOverlay();
+    if (el.closest('.sheet') && !['appearance', 'new-project', 'quick-due', 'sheet-recurring'].includes(el.dataset.action)) closeOverlay();
     const a = el.dataset.action;
     const id = el.dataset.id;
     switch (a) {
@@ -1623,6 +1776,33 @@
       case 'new-project': S.sidebarOpen = false; render(); projectDialog(null); break;
       case 'edit-project': projectDialog(getProject(id)); break;
       case 'new-recurring': recurringDialog(id); break;
+      case 'sheet-recurring': {
+        const f = new FormData(el.closest('form'));
+        recurringDialog(String(f.get('project')), { title: String(f.get('title')).trim(), priority: Number(f.get('priority')) || 3, start: String(f.get('due')) });
+        break;
+      }
+      case 'project-menu': projectSheet(id); break;
+      case 'home-prefs': homePrefsDialog(); break;
+      case 'search': searchDialog(); break;
+      case 'search-open': openFound(el.dataset.kind, id, el.dataset.line); break;
+      case 'd-menu': {
+        const m = overlay.querySelector('#d-menu');
+        if (m) setDrawerMenu(m.hidden);
+        break;
+      }
+      case 'd-menu-pane': {
+        const m = el.closest('#d-menu');
+        m.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== el.dataset.value; });
+        const b = m.querySelector('[data-pane]:not([hidden]) button'); if (b) b.focus();
+        break;
+      }
+      case 'move-project-sheet': moveSheet(id); break;
+      case 'move-project': {
+        const t = getTask(id);
+        if (t) { moveToProject(t, el.dataset.value); render(); refreshDrawer(); }
+        const b = overlay.querySelector('[data-action="d-menu"]'); if (b) b.focus();
+        break;
+      }
       case 'pick-emoji': {
         const form = el.closest('form');
         form.elements.emoji.value = el.dataset.value;
@@ -1685,7 +1865,7 @@
         }
       case 'focus-quick': {
         const q = S.route.view === 'project' && document.getElementById('quick');
-        if (q) q.focus(); else newTaskSheet();
+        if (q && q.getClientRects().length) q.focus(); else newTaskSheet();
         break;
       }
       case 'toggle-done': S.showDone = !S.showDone; renderTasksArea(); break;
@@ -1949,7 +2129,8 @@
   document.addEventListener('input', (e) => {
     const el = e.target;
     if (el.closest && el.closest('[data-form="finline"]')) finSplitPreview();
-    if (el.dataset && el.dataset.fin === 'q') { S.finF.q = el.value; const box = document.getElementById('fin-list-box'); if (box) box.innerHTML = finListHtml(finMonthList(S.finMonth)); }
+    if (el.id === 'gs-q') { const box = document.getElementById('gs-results'); if (box) { box.innerHTML = searchResults(el.value); box.scrollTop = 0; } }
+    else if (el.dataset && el.dataset.fin === 'q') { S.finF.q = el.value; const box = document.getElementById('fin-list-box'); if (box) box.innerHTML = finListHtml(finMonthList(S.finMonth)); }
     else if (el.dataset && el.dataset.filter === 'q') { S.filters.q = el.value; renderTasksArea(); updFilterDot(); }
     else if (el.id === 'accent-custom') { saveAccent({ custom: el.value }); applyAccent(); }
     else if (el.id === 'pj-emoji') {
@@ -1971,6 +2152,7 @@
     }
     if (ds.fin === 'status' || ds.fin === 'sort') { S.finF[ds.fin] = el.value; render(); return; }
     if (el.id === 'accent-custom') { appearanceDialog(); return; }
+    if (ds.home) { const off = homeHidden().filter((k) => k !== ds.home); saveHomeHidden(el.checked ? off : [...off, ds.home]); render(); return; }
     if (el.id === 'water-goal') { waterSet({ goal: clamp(parseInt(el.value, 10) || waterGoal(), 1, 30) }); render(); return; }
     if (el.id === 'sheet-due') {
       const tt = getTask(el.closest('.sheet').dataset.task);
@@ -2029,6 +2211,24 @@
       }
     }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      if (S.loading || S.loadError || pomoFull || (Store.mode === 'cloud' && !S.user)) return;
+      e.preventDefault();
+      if (overlay.querySelector('.search-dialog')) closeOverlay();
+      else if (!overlay.querySelector('.dialog form, .sheet form')) searchDialog(); // não descarta um formulário aberto
+      return;
+    }
+    const gs = e.target.closest && e.target.closest('.search-dialog');
+    if (gs && ['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) {
+      const input = document.getElementById('gs-q'), rows = [...gs.querySelectorAll('.search-row')], i = rows.indexOf(e.target);
+      if (e.key === 'Enter') { if (e.target === input && rows[0]) { e.preventDefault(); rows[0].click(); } return; }
+      if (!rows.length) return;
+      e.preventDefault();
+      const next = e.key === 'ArrowDown' ? rows[Math.min(i + 1, rows.length - 1)] : i > 0 ? rows[i - 1] : input;
+      next.focus();
+      return;
+    }
+    if (e.key === 'Escape' && overlay.querySelector('#d-menu:not([hidden])')) { e.preventDefault(); setDrawerMenu(false, true); return; }
     if (e.key === 'Escape') {
       if (pomoFull) { setPomoFull(false); return; }
       if (overlay.firstElementChild) closeOverlay();
@@ -2064,7 +2264,7 @@
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
       const btn = document.querySelector('[data-action="focus-quick"]');
-      if (S.route.view === 'project') { const q = document.getElementById('quick'); if (q) q.focus(); }
+      if (S.route.view === 'project') { const q = document.getElementById('quick'); if (q && q.getClientRects().length) q.focus(); else newTaskSheet(); }
       else if (!S.projects.length) projectDialog(null);
       else if (btn) btn.click();
     } else if (e.key === '/' && document.getElementById('search')) {
@@ -2167,7 +2367,7 @@
     if (!isMobile() || e.touches.length !== 1) return;
     const box = e.target.closest && e.target.closest('.sheet, .drawer, .dialog');
     if (!box || e.target.closest('input, textarea, select')) return;
-    const sc = box.querySelector('.drawer-body') || box;
+    const sc = box.querySelector('.drawer-body, .search-results') || box;
     if (sc.scrollTop > 0) return;
     dn = { box, sc, x: e.touches[0].clientX, y: e.touches[0].clientY, dy: 0, lock: false };
   }, { passive: true });

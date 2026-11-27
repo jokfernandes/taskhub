@@ -108,6 +108,17 @@
       check(await sb.from(table).delete().eq('id', id));
     },
 
+    // Leva o histórico da tarefa junto quando ela muda de projeto.
+    async moveHistory(taskId, projectId) {
+      if (!sb) {
+        const data = local.read();
+        data.activity.forEach((a) => { if (a.task_id === taskId) a.project_id = projectId; });
+        local.write(data);
+        return;
+      }
+      check(await sb.from('activity').update({ project_id: projectId }).eq('task_id', taskId));
+    },
+
     exportJSON(state) {
       return JSON.stringify(
         {
