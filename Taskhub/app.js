@@ -88,7 +88,8 @@
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M4 4l16 16M9.9 5.8a9.8 9.8 0 0 1 2.1-.3c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.7 3.4M6.4 7.4A16 16 0 0 0 2.5 12S6 18.5 12 18.5a9.5 9.5 0 0 0 3.6-.7M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
-    sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'
+    sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+    archive: '<path d="M4 4h16v4H4zM5 8v12h14V8M10 12h4"/>'
   };
   const icon = (n, s = 18) =>
     `<svg class="ico" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[n]}</svg>`;
@@ -120,7 +121,9 @@
     pause: { verb: 'pausou', icon: 'pause' },
     recurring: { verb: 'criou a recorrência', icon: 'repeat' },
     recurred: { verb: 'gerou', icon: 'repeat' },
-    moved: { verb: 'moveu', icon: 'folder' }
+    moved: { verb: 'moveu', icon: 'folder' },
+    archived: { verb: 'arquivou o projeto', icon: 'archive' },
+    restored: { verb: 'restaurou o projeto', icon: 'archive' }
   };
 
   /* ---------- estado ---------- */
@@ -150,6 +153,13 @@
   const getTask = (id) => S.tasks.find((t) => t.id === id);
   const realTasks = () => S.tasks.filter((t) => !t.recurrence);
   const templates = () => S.tasks.filter((t) => t.recurrence);
+  // Projeto arquivado sai das telas do dia a dia; o histórico de concluídas continua contando.
+  const isArchived = (p) => !!(p && p.archived_at);
+  const liveProjects = () => S.projects.filter((p) => !isArchived(p));
+  const archivedProjects = () => S.projects.filter(isArchived).sort((a, b) => b.archived_at.localeCompare(a.archived_at));
+  const inArchive = (t) => isArchived(getProject(t.project_id));
+  const activeTasks = () => realTasks().filter((t) => !inArchive(t));
+  const canMove = (t) => liveProjects().some((p) => p.id !== t.project_id);
   const clStats = (t) => ({ done: t.checklist.filter((c) => c.done).length, total: t.checklist.length });
 
   /* ---------- persistência (otimista) ---------- */
@@ -227,6 +237,7 @@
     el.querySelector('button').addEventListener('click', () => entry.finish(true));
     pendingUndo.add(entry);
     box.appendChild(el);
+    return entry;
   }
   // Ao sair da aba, confirma as exclusões pendentes (senão o item voltaria no próximo carregamento).
   const flushUndo = () => [...pendingUndo].forEach((e) => e.finish(false));
@@ -247,6 +258,65 @@
     return p;
   }
   function updateProject(p, patch) { Object.assign(p, patch); persist('projects', p); }
+  let archQueue = Promise.resolve(); // grava na ordem, mesmo se "Desfazer" vier antes de a rede responder
+  const saveArchive = (p) => (archQueue = archQueue.then(() => Store.save('projects', p)));
+  // Recorrências voltam do dia de hoje em diante, sem gerar o que venceu enquanto estavam paradas.
+  function skipMissed(tpl) {
+    if (tpl.recurrence.paused || !tpl.recur_next) return;
+    const today = ymd(new Date()), until = tpl.recurrence.until || null;
+    let next = tpl.recur_next, guard = 0;
+    while (next < today && guard++ < 5000) next = nextOcc(tpl.recurrence, next);
+    if (until && next > until) next = null;
+    if (next !== tpl.recur_next) updateTask(tpl, { recur_next: next });
+  }
+  function archiveProject(p) {
+    if (isArchived(p)) return;
+    const paused = realTasks().filter((t) => t.project_id === p.id && t.timer_started_at)
+      .map((t) => ({ t, time_spent: t.time_spent, timer_started_at: t.timer_started_at }));
+    const focus = PM.taskId, focused = focus && getTask(focus);
+    p.archived_at = nowISO();
+    paused.forEach((x) => stopTimer(x.t, true));
+    if (focused && focused.project_id === p.id) { PM.taskId = null; savePomo(); }
+    let failed = false, note = null;
+    const resume = () => {
+      paused.forEach((x) => {
+        if (getTask(x.t.id) === x.t && !activeTasks().some((o) => o.timer_started_at)) updateTask(x.t, { time_spent: x.time_spent, timer_started_at: x.timer_started_at });
+      });
+      if (focused && focused.project_id === p.id && !PM.taskId) { PM.taskId = focus; savePomo(); }
+    };
+    saveArchive(p).catch((e) => {
+      console.error(e);
+      archQueue = Promise.resolve();
+      failed = true;
+      if (note) note.finish(false); // tira o "Desfazer": não há o que desfazer
+      delete p.archived_at; // sem a coluna no banco, o campo não pode ir nas próximas gravações
+      resume(); render();
+      toast(/archived_at/.test((e && e.message) || '') ? 'Rode o migracao-v8.sql no Supabase para arquivar.' : 'Não foi possível arquivar. Confira a conexão.', 'error');
+    });
+    note = undoable('Projeto arquivado', () => {
+      if (failed || getProject(p.id) !== p || !isArchived(p)) return;
+      p.archived_at = null;
+      saveArchive(p).catch(saveFailed);
+      resume(); render();
+    }, () => {
+      if (failed || getProject(p.id) !== p || !isArchived(p)) return;
+      paused.forEach((x) => logActivity('pause', taskMsg(x.t), p.id, x.t.id));
+      logActivity('archived', p.name, p.id, null);
+    });
+  }
+  function saveFailed(e) {
+    console.error(e);
+    archQueue = Promise.resolve();
+    toast('Não salvou. Confira a conexão e tente de novo.', 'error');
+  }
+  function restoreProject(p) {
+    if (!isArchived(p)) return;
+    templates().filter((t) => t.project_id === p.id).forEach(skipMissed);
+    p.archived_at = null;
+    saveArchive(p).then(() => logActivity('restored', p.name, p.id, null)).catch(saveFailed);
+    runRecurrences();
+    toast('Projeto restaurado');
+  }
   function deleteProject(p) {
     const snap = {
       tasks: S.tasks.filter((t) => t.project_id === p.id),
@@ -336,6 +406,7 @@
     const to = getProject(projectId);
     if (!to || to.id === t.project_id) return;
     const prev = { project_id: t.project_id, number: t.number, milestone_id: t.milestone_id, position: t.position };
+    if (t.recurrence && inArchive(t) && !isArchived(to)) skipMissed(t);
     if (!t.recurrence) to.task_counter = (to.task_counter || 0) + 1;
     const place = (patch, projectSaved) => {
       Object.assign(t, patch, { updated_at: nowISO() });
@@ -363,7 +434,7 @@
     if (!silent) logActivity('pause', taskMsg(t), t.project_id, t.id);
   }
   function startTimer(t) {
-    if (t.timer_started_at || t.recurrence || t.status === 'done') return;
+    if (t.timer_started_at || t.recurrence || t.status === 'done' || inArchive(t)) return;
     realTasks().forEach((o) => { if (o.timer_started_at && o.id !== t.id) stopTimer(o); }); // um cronômetro por vez
     const wasTodo = t.status === 'todo';
     updateTask(t, { timer_started_at: nowISO() });
@@ -371,7 +442,7 @@
     else logActivity('play', taskMsg(t), t.project_id, t.id);
   }
   function playBtn(t, cls) {
-    if (t.recurrence || t.status === 'done') return '';
+    if (t.recurrence || t.status === 'done' || inArchive(t)) return '';
     const on = !!t.timer_started_at;
     return `<button class="play ${on ? 'on' : ''} ${cls || ''}" data-action="toggle-timer" data-id="${t.id}" aria-label="${on ? 'Pausar' : 'Iniciar'} cronômetro">${icon(on ? 'pause' : 'play', cls === 'lg' ? 18 : 13)}</button>`;
   }
@@ -507,9 +578,10 @@
     from.setDate(from.getDate() - 6);
     const all = realTasks();
     const done = all.filter((t) => t.status === 'done' && t.completed_at && new Date(t.completed_at) >= from).sort((a, b) => b.completed_at.localeCompare(a.completed_at));
-    const stale = all.filter((t) => t.status !== 'done' && !t.timer_started_at && Date.now() - Date.parse(t.updated_at) > 7 * DAY_MS).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
-    const waiting = all.filter((t) => t.status === 'waiting' || t.status === 'approval');
-    const late = all.filter((t) => { const d = dueInfo(t); return d && d.overdue; });
+    const live = activeTasks();
+    const stale = live.filter((t) => t.status !== 'done' && !t.timer_started_at && Date.now() - Date.parse(t.updated_at) > 7 * DAY_MS).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+    const waiting = live.filter((t) => t.status === 'waiting' || t.status === 'approval');
+    const late = live.filter((t) => { const d = dueInfo(t); return d && d.overdue; });
     const secs = done.reduce((n, t) => n + (t.time_spent || 0), 0);
     const block = (title, items, empty) => `<section class="card" style="margin-top:14px"><h2>${title} <small>${items.length}</small></h2>
       ${items.length ? `<div class="list">${items.map((t) => taskRow(t, 'proj')).join('')}</div>` : `<div class="empty sm"><p>${empty}</p></div>`}</section>`;
@@ -607,7 +679,7 @@
     const today = ymd(new Date());
     let changed = false;
     for (const tpl of templates()) {
-      if (tpl.recurrence.paused || !tpl.recur_next || tpl.recur_next > today) continue;
+      if (tpl.recurrence.paused || !tpl.recur_next || tpl.recur_next > today || inArchive(tpl)) continue;
       const until = tpl.recurrence.until || null;
       let occ = null, next = tpl.recur_next, guard = 0;
       while (next && next <= today && guard++ < 800) {
@@ -846,7 +918,7 @@
       PM.log[k] = day;
       PM.cycle += 1;
       const t = PM.taskId && getTask(PM.taskId);
-      if (t && !t.timer_started_at) updateTask(t, { time_spent: (t.time_spent || 0) + PM.cfg.focus * 60 });
+      if (t && !t.timer_started_at && !inArchive(t)) updateTask(t, { time_spent: (t.time_spent || 0) + PM.cfg.focus * 60 });
     }
     PM.mode = pomoNext();
     PM.remaining = pomoTotal();
@@ -890,7 +962,7 @@
     const day = PM.log[ymd(new Date())] || { n: 0, min: 0 };
     const every = PM.cfg.every;
     const filled = PM.cycle % every || (PM.mode === 'long' ? every : 0);
-    const open = realTasks().filter((t) => t.status !== 'done').sort((a, b) => a.project_id.localeCompare(b.project_id) || a.number - b.number);
+    const open = activeTasks().filter((t) => t.status !== 'done').sort((a, b) => a.project_id.localeCompare(b.project_id) || a.number - b.number);
     const label = PM.running ? 'Pausar' : left < total ? 'Continuar' : 'Iniciar';
     const num = (id, v, lbl) => `<div class="field"><label for="${id}">${lbl}</label><input class="input" type="number" id="${id}" data-pomo="${id.replace('pc-', '')}" min="1" max="180" value="${v}"></div>`;
     return `
@@ -1027,6 +1099,10 @@
   }
 
   /* ---------- HTML: telas ---------- */
+  const archivedNav = () => {
+    const n = archivedProjects().length;
+    return n ? `<button type="button" class="nav-item" data-action="archived"><span class="nav-ico">${icon('archive')}</span><span class="grow">Arquivados</span><span class="count">${n}</span></button>` : '';
+  };
   function sidebar() {
     const openCount = (id) => realTasks().filter((t) => t.project_id === id && t.status !== 'done').length;
     const dark = document.documentElement.dataset.theme === 'dark';
@@ -1042,9 +1118,10 @@
         <a class="nav-item ${v === 'finance' ? 'active' : ''}" href="#/financas"><span class="nav-ico">${icon('wallet')}</span><span class="grow">Finanças</span></a>
         <a class="nav-item ${v === 'review' ? 'active' : ''}" href="#/revisao"><span class="nav-ico">${icon('listcheck')}</span><span class="grow">Revisão semanal</span></a>
         <div class="nav-title"><span>Projetos</span><button class="icon-btn sm" data-action="new-project" aria-label="Novo projeto">${icon('plus', 16)}</button></div>
-        ${S.projects.length
-          ? S.projects.map((p) => `<a class="nav-item ${v === 'project' && S.route.id === p.id ? 'active' : ''}" href="#/p/${p.id}"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id) || ''}</span></a>`).join('')
-          : '<div class="nav-empty">Nenhum projeto ainda.</div>'}
+        ${liveProjects().length
+          ? liveProjects().map((p) => `<a class="nav-item ${v === 'project' && S.route.id === p.id ? 'active' : ''}" href="#/p/${p.id}"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id) || ''}</span></a>`).join('')
+          : `<div class="nav-empty">${S.projects.length ? 'Nenhum projeto ativo.' : 'Nenhum projeto ainda.'}</div>`}
+        ${archivedNav()}
       </nav>
       <div class="side-foot">
         <button class="nav-item" data-action="appearance">${icon('palette')}<span>Aparência</span></button>
@@ -1121,8 +1198,9 @@
       </div>`;
     }
     const all = realTasks();
-    const open = all.filter((t) => t.status !== 'done');
-    const doing = all.filter((t) => t.status === 'doing').sort((a, b) => (b.timer_started_at ? 1 : 0) - (a.timer_started_at ? 1 : 0) || a.position - b.position);
+    const live = liveProjects();
+    const open = activeTasks().filter((t) => t.status !== 'done');
+    const doing = open.filter((t) => t.status === 'doing').sort((a, b) => (b.timer_started_at ? 1 : 0) - (a.timer_started_at ? 1 : 0) || a.position - b.position);
     const weekStart = startOfDay(new Date());
     weekStart.setDate(weekStart.getDate() - 6);
     const doneWeek = all.filter((t) => t.status === 'done' && t.completed_at && new Date(t.completed_at) >= weekStart);
@@ -1137,9 +1215,10 @@
       <div class="page-head"><div><h1>${greet}</h1><p class="sub">${date}</p></div>
         <div class="ph-acts"><button type="button" class="icon-btn" data-action="home-prefs" aria-label="Personalizar visão geral" title="Personalizar visão geral">${icon('sliders', 18)}</button>
           <button class="btn primary" data-action="focus-quick">${icon('plus', 16)}Nova tarefa</button></div></div>
-      ${todayBlock(all, doing)}
+      ${todayBlock(open, doing)}
       <h2 class="section-title">Projetos</h2>
-      <div class="proj-grid home-proj">${S.projects.map(projCard).join('')}</div>
+      ${live.length ? `<div class="proj-grid home-proj">${live.map(projCard).join('')}</div>`
+        : `<div class="card empty sm home-proj"><p>Nenhum projeto ativo. Crie um novo ou restaure um arquivado.</p><div class="acts"><button type="button" class="btn primary" data-action="new-project">${icon('plus', 16)}Novo projeto</button><button type="button" class="btn" data-action="archived">${icon('archive', 16)}Ver arquivados</button></div></div>`}
       ${off.includes('fin') ? '' : finGlance()}
       <div class="stats">
         <div class="stat hero"><b>${open.length}</b><span>${open.length === 1 ? 'tarefa aberta' : 'tarefas abertas'}</span></div>
@@ -1155,7 +1234,7 @@
             ? `<div class="dl">${deadlines.map((t) => { const d = dueInfo(t); const p = getProject(t.project_id); return `<div class="dl-item" data-action="open-task" data-id="${t.id}">${prioTag(t.priority)}<span class="t-title"><button type="button" class="t-link" data-action="open-task" data-id="${t.id}">${esc(t.title)}</button></span><span class="due ${d.overdue ? 'overdue' : ''}">${icon('calendar', 13)}${d.label}</span><span class="emoji" title="${esc(p ? p.name : '')}">${esc(p ? p.emoji : '')}</span></div>`; }).join('')}</div>`
             : '<div class="empty sm"><p>Defina uma data em uma tarefa e ela aparece aqui.</p></div>'}
         </section>
-        <section class="card"><h2>Atividade recente</h2>${timeline(S.activity.slice(0, 8), { showProject: true })}</section>
+        <section class="card"><h2>Atividade recente</h2>${timeline(S.activity.filter((a) => !isArchived(getProject(a.project_id))).slice(0, 8), { showProject: true })}</section>
       </div>`;
   }
   function projCard(p) {
@@ -1296,8 +1375,9 @@
     const cloud = Store.mode === 'cloud';
     const openCount = (id) => realTasks().filter((t) => t.project_id === id && t.status !== 'done').length || '';
     const body = kind === 'projects'
-      ? `${S.projects.map((p) => `<a class="nav-item" href="#/p/${p.id}" data-action="close-overlay"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id)}</span></a>`).join('') || '<div class="nav-empty">Nenhum projeto ainda.</div>'}
-        <button type="button" class="nav-item" data-action="new-project">${icon('plus')}<span class="grow">Novo projeto</span></button>`
+      ? `${liveProjects().map((p) => `<a class="nav-item" href="#/p/${p.id}" data-action="close-overlay"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span><span class="count">${openCount(p.id)}</span></a>`).join('') || `<div class="nav-empty">${S.projects.length ? 'Nenhum projeto ativo.' : 'Nenhum projeto ainda.'}</div>`}
+        <button type="button" class="nav-item" data-action="new-project">${icon('plus')}<span class="grow">Novo projeto</span></button>
+        ${archivedNav()}`
       : `<a class="nav-item" href="#/pomodoro" data-action="close-overlay">${icon('timer')}<span class="grow">Pomodoro</span></a>
         <a class="nav-item" href="#/revisao" data-action="close-overlay">${icon('listcheck')}<span class="grow">Revisão semanal</span></a>
         <button type="button" class="nav-item" data-action="appearance">${icon('palette')}<span class="grow">Aparência</span></button>
@@ -1316,12 +1396,12 @@
       <label class="nav-item"><span class="nav-ico">${icon('calendar')}</span><span class="grow">Prazo</span><input class="input" type="date" id="sheet-due" value="${esc(t.due_date || '')}" aria-label="Prazo"></label>
       <div class="sheet-sub">Mudar status para…</div>
       ${Object.keys(STATUS).filter((k) => k !== t.status).map((k) => `<button type="button" class="nav-item" data-action="move-to" data-id="${t.id}" data-value="${k}"><span class="grow">${STATUS[k]}</span></button>`).join('')}
-      ${S.projects.length > 1 ? `<button type="button" class="nav-item" data-action="move-project-sheet" data-id="${t.id}">${icon('folder')}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
+      ${canMove(t) ? `<button type="button" class="nav-item" data-action="move-project-sheet" data-id="${t.id}">${icon('folder')}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
       <button type="button" class="nav-item danger" data-action="sheet-delete" data-id="${t.id}">${icon('trash')}<span class="grow">Excluir</span></button>
     </div></div>`;
   }
 
-  const projectChoices = (t) => S.projects.filter((p) => p.id !== t.project_id)
+  const projectChoices = (t) => liveProjects().filter((p) => p.id !== t.project_id)
     .map((p) => `<button type="button" class="nav-item" data-action="move-project" data-id="${t.id}" data-value="${p.id}"><span class="emoji">${esc(p.emoji)}</span>${pdot(p)}<span class="grow">${esc(p.name)}</span></button>`).join('');
   function moveSheet(id) {
     const t = getTask(id);
@@ -1350,17 +1430,18 @@
   function fabBtn() {
     const v = S.route.view;
     const show = v === 'home' || (v === 'project' && S.route.tab !== 'activity');
-    return show && S.projects.length ? `<button type="button" class="fab ${v === 'project' ? 'round' : ''}" data-action="new-task-sheet" aria-label="Nova tarefa">${icon('plus', 20)}<span>Nova tarefa</span></button>` : '';
+    return show && liveProjects().length ? `<button type="button" class="fab ${v === 'project' ? 'round' : ''}" data-action="new-task-sheet" aria-label="Nova tarefa">${icon('plus', 20)}<span>Nova tarefa</span></button>` : '';
   }
   function newTaskSheet() {
-    if (!S.projects.length) { projectDialog(null); return; }
-    const cur = S.route.view === 'project' && getProject(S.route.id) ? S.route.id : S.projects[0].id;
+    const live = liveProjects();
+    if (!live.length) { projectDialog(null); return; }
+    const cur = S.route.view === 'project' && live.some((p) => p.id === S.route.id) ? S.route.id : live[0].id;
     blurIn(overlay);
     overlay.innerHTML = `<div class="overlay sheet-bg" data-action="close-overlay-bg"><div class="sheet" role="dialog" aria-label="Nova tarefa">
       <div class="sheet-title">Nova tarefa</div>
       <form data-form="sheet-add" autocomplete="off">
         <input class="input" id="sa-title" name="title" placeholder="O que precisa ser feito?" required maxlength="120" aria-label="Título">
-        ${S.projects.length > 1 ? `<select class="select" name="project" aria-label="Projeto">${S.projects.map((p) => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(p.emoji)} ${esc(p.name)}</option>`).join('')}</select>` : `<input type="hidden" name="project" value="${cur}">`}
+        ${live.length > 1 ? `<select class="select" name="project" aria-label="Projeto">${live.map((p) => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(p.emoji)} ${esc(p.name)}</option>`).join('')}</select>` : `<input type="hidden" name="project" value="${cur}">`}
         <div class="split">
           <label class="field-in"><span class="lbl">Prazo</span><input class="input" type="date" name="due" aria-label="Prazo"></label>
           <label class="field-in"><span class="lbl">Prioridade</span><select class="select" name="priority" aria-label="Prioridade">${[1, 2, 3, 4, 5].map((k) => `<option value="${k}" ${k === 3 ? 'selected' : ''}>${PRIO[k]}</option>`).join('')}</select></label>
@@ -1388,7 +1469,10 @@
     let view = '', title = APP_NAME;
     if (S.route.view === 'project') {
       const p = getProject(S.route.id);
-      if (p) { view = projectView(p); title = p.name; } else S.route = { view: 'home' };
+      if (p && !isArchived(p)) { view = projectView(p); title = p.name; } else {
+        S.route = { view: 'home' };
+        try { history.replaceState(null, '', location.pathname + location.search + '#/'); } catch (e) {}
+      }
     }
     if (S.route.view === 'pomodoro') { view = pomoFull ? pomoFullView() : pomodoroView(); title = 'Pomodoro'; }
     if (S.route.view === 'review') { view = reviewView(); title = 'Revisão semanal'; }
@@ -1466,6 +1550,7 @@
   function drawerHTML(t) {
     const p = getProject(t.project_id);
     const tpl = !!t.recurrence;
+    const arch = isArchived(p);
     const hist = S.activity.filter((a) => a.task_id === t.id);
     const cl = clStats(t);
     const run = !!t.timer_started_at;
@@ -1489,13 +1574,13 @@
     const links = `${t.links.map((l) => `<div class="link-item"><a href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener noreferrer">${esc(l.title)}</a><button type="button" class="icon-btn sm" data-action="link-remove" data-value="${l.id}" aria-label="Remover link">${icon('x', 14)}</button></div>`).join('')}
       <div class="link-add"><input class="input" id="d-link-title" placeholder="Título (opcional)" aria-label="Título do link"><input class="input" id="d-link-url" placeholder="Cole o link e Enter" aria-label="Endereço do link"></div>`;
     return `<aside class="drawer" role="dialog" aria-label="${tpl ? 'Tarefa recorrente' : 'Tarefa'}">
-      <div class="drawer-head"><span>${esc(p.emoji)} ${esc(p.name)} · ${tpl ? 'Recorrente' : 'Tarefa'}</span>
+      <div class="drawer-head"><span>${esc(p.emoji)} ${esc(p.name)} · ${tpl ? 'Recorrente' : 'Tarefa'}${arch ? ' · Arquivada' : ''}</span>
         <span><span class="d-menu-wrap"><button type="button" class="icon-btn" data-action="d-menu" aria-label="Mais ações" aria-expanded="false" aria-controls="d-menu">${icon('more', 20)}</button>
           <div class="d-menu" id="d-menu" hidden>
             <div data-pane="main">
-              ${!tpl ? `<button type="button" class="nav-item" data-action="dup-task">${icon('copy', 17)}<span class="grow">Duplicar tarefa</span></button>
+              ${!tpl && !arch ? `<button type="button" class="nav-item" data-action="dup-task">${icon('copy', 17)}<span class="grow">Duplicar tarefa</span></button>
               <button type="button" class="nav-item" data-action="to-recurring">${icon('repeat', 17)}<span class="grow">Tornar recorrente</span></button>` : ''}
-              ${S.projects.length > 1 ? `<button type="button" class="nav-item" data-action="d-menu-pane" data-value="move">${icon('folder', 17)}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
+              ${canMove(t) ? `<button type="button" class="nav-item" data-action="d-menu-pane" data-value="move">${icon('folder', 17)}<span class="grow">Mover para outro projeto</span>${icon('chev', 15)}</button>` : ''}
               <button type="button" class="nav-item danger" data-action="delete-task">${icon('trash', 17)}<span class="grow">${tpl ? 'Excluir recorrência' : 'Excluir tarefa'}</span></button>
             </div>
             <div data-pane="move" hidden>
@@ -1505,6 +1590,7 @@
             </div>
           </div></span><button type="button" class="icon-btn" data-action="close-overlay" aria-label="Fechar">${icon('x', 18)}</button></span></div>
       <div class="drawer-body">
+        ${arch ? `<div class="arch-note">${icon('archive', 16)}<span>Este projeto está arquivado.</span><button type="button" class="btn" data-action="restore-project" data-id="${p.id}">Restaurar</button></div>` : ''}
         <input class="title-input" id="d-title" value="${esc(t.title)}" aria-label="Título">
         ${t.recur_source ? `<div class="note">${icon('repeat', 14)}Gerada automaticamente por uma tarefa recorrente</div>` : ''}
         <textarea class="textarea desc" id="d-desc" placeholder="Adicionar descrição" aria-label="Descrição">${esc(t.description)}</textarea>
@@ -1561,7 +1647,7 @@
       returnInfo = l && l.isConnected && l !== document.body ? { el: l, id: l.dataset && l.dataset.id, action: l.dataset && l.dataset.action } : null;
     }
     ovWasOpen = open;
-    const d = overlay.querySelector('[role="dialog"]');
+    const d = overlay.querySelector('[role="dialog"], [role="alertdialog"]');
     if (d && !d.hasAttribute('aria-modal')) {
       d.setAttribute('aria-modal', 'true');
       d.setAttribute('tabindex', '-1');
@@ -1593,11 +1679,38 @@
         <div class="field"><span class="lbl">Cor</span><input type="hidden" name="color" value="${esc(colorOf(p))}">
           <div class="color-pick"><button type="button" class="sw none ${!colorOf(p) ? 'on' : ''}" data-action="pick-color" data-value="" aria-label="Sem cor"></button>${COLORS.map((c) => `<button type="button" class="sw ${colorOf(p) === c ? 'on' : ''}" style="background:${c}" data-action="pick-color" data-value="${c}" aria-label="Cor ${c}"></button>`).join('')}</div></div>
         <div class="acts">
-          ${p ? '<button type="button" class="btn danger ghost" data-action="delete-project">Excluir</button>' : '<span></span>'}
+          ${p ? `<div class="l"><button type="button" class="btn" data-action="archive-project" data-id="${p.id}">${icon('archive', 15)}Arquivar</button><button type="button" class="btn danger ghost" data-action="delete-project" data-id="${p.id}">Excluir</button></div>` : '<span></span>'}
           <div class="r"><button type="button" class="btn" data-action="close-overlay">Cancelar</button><button class="btn primary" type="submit">${p ? 'Salvar' : 'Criar projeto'}</button></div>
         </div>
       </form></div></div>`;
     setTimeout(() => { const i = document.getElementById('pj-name'); if (i) i.focus(); }, 30);
+  }
+  function deleteProjectDialog(p) {
+    const ts = S.tasks.filter((t) => t.project_id === p.id);
+    const recs = ts.filter((t) => t.recurrence).length, n = ts.length - recs;
+    const open = ts.filter((t) => !t.recurrence && t.status !== 'done').length;
+    const parts = [];
+    if (n) parts.push(`<b>${plural(n, 'tarefa', 'tarefas')}</b>${open ? ` (${plural(open, 'aberta', 'abertas')})` : ''}`);
+    if (recs) parts.push(`<b>${plural(recs, 'recorrência', 'recorrências')}</b>`);
+    blurIn(overlay); overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="alertdialog" aria-label="Excluir projeto" aria-describedby="del-text">
+      <h2>Excluir projeto?</h2>
+      <p class="dlg-text" id="del-text">${parts.length ? `Excluir “${esc(p.name)}” apaga ${parts.join(' e ')}, com o histórico e os marcos.` : `“${esc(p.name)}” não tem tarefas. O histórico e os marcos também saem.`}${isArchived(p) ? '' : ' Para só tirar da tela, arquive.'}</p>
+      <div class="acts"><button type="button" class="btn danger ghost" data-action="confirm-delete-project" data-id="${p.id}">Excluir projeto</button>
+        <div class="r"><button type="button" class="btn" data-action="${isArchived(p) ? 'archived' : 'close-overlay'}">Cancelar</button>${isArchived(p) ? '' : `<button type="button" class="btn primary" data-action="archive-project" data-id="${p.id}">Arquivar</button>`}</div></div>
+    </div></div>`;
+  }
+  function archivedDialog() {
+    const list = archivedProjects();
+    if (!list.length) { closeOverlay(); return; }
+    drawerId = null; dlgRec = null;
+    blurIn(overlay); overlay.innerHTML = `<div class="overlay center" data-action="close-overlay-bg"><div class="dialog" role="dialog" aria-label="Projetos arquivados">
+      <h2>Projetos arquivados</h2>
+      <ul class="arch-list">${list.map((p) => `<li><span class="emoji">${esc(p.emoji)}</span><span class="fin-txt"><b>${esc(p.name)}</b><small>${plural(S.tasks.filter((t) => t.project_id === p.id && !t.recurrence).length, 'tarefa', 'tarefas')} · desde ${shortDate(ymd(new Date(p.archived_at)))}</small></span>
+        <button type="button" class="btn" data-action="restore-project" data-id="${p.id}" aria-label="Restaurar ${esc(p.name)}">Restaurar</button>
+        <button type="button" class="icon-btn" data-action="delete-project" data-id="${p.id}" aria-label="Excluir ${esc(p.name)}">${icon('trash', 17)}</button></li>`).join('')}</ul>
+      <p class="dlg-text">A busca geral ainda encontra as tarefas destes projetos.</p>
+      <div class="acts"><span></span><div class="r"><button type="button" class="btn primary" data-action="close-overlay">Pronto</button></div></div>
+    </div></div>`;
   }
   function recurringDialog(projectId, src) {
     dlgRec = { freq: 'daily', interval: 1, days: [new Date().getDay()], day: null, paused: false };
@@ -1624,7 +1737,7 @@
     if (!words.length) return null;
     const tasks = S.tasks.filter((t) => getProject(t.project_id)
       && has([t.title, t.description, ...t.labels, ...t.checklist.map((c) => c.text), ...(t.links || []).map((l) => l.title)].join(' ')))
-      .sort((a, b) => (a.status === 'done') - (b.status === 'done') || has(b.title) - has(a.title) || String(b.updated_at).localeCompare(String(a.updated_at)));
+      .sort((a, b) => inArchive(a) - inArchive(b) || (a.status === 'done') - (b.status === 'done') || has(b.title) - has(a.title) || String(b.updated_at).localeCompare(String(a.updated_at)));
     const fin = [];
     S.finItems.forEach((it) => { if (has(it.name)) fin.push({ id: it.id, line: '', it, title: it.name, sub: FIN[it.kind].label }); });
     S.finLines.forEach((l) => {
@@ -1641,7 +1754,7 @@
     if (!r.tasks.length && !r.fin.length) return '<p class="search-hint">Nada encontrado. Tente outra palavra.</p>';
     const row = (kind, id, line, ico, title, sub, done) => `<li><button type="button" class="search-row ${done ? 'done' : ''}" data-action="search-open" data-kind="${kind}" data-id="${id}" data-line="${line}"><span class="search-ico">${ico}</span><span class="fin-txt"><b>${esc(title)}</b><small>${esc(sub)}</small></span></button></li>`;
     const group = (title, items, max, draw) => (items.length ? `<section><h3>${title} <small>${items.length}</small></h3><ul>${items.slice(0, max).map(draw).join('')}</ul>${items.length > max ? `<p class="search-hint">Mais ${items.length - max}. Digite mais para refinar.</p>` : ''}</section>` : '');
-    return group('Tarefas', r.tasks, 20, (t) => { const p = getProject(t.project_id); return row('task', t.id, '', esc(p.emoji), t.title, `${p.name} · ${t.recurrence ? 'Recorrente' : STATUS[t.status]}`, t.status === 'done'); })
+    return group('Tarefas', r.tasks, 20, (t) => { const p = getProject(t.project_id); return row('task', t.id, '', esc(p.emoji), t.title, `${isArchived(p) ? 'Arquivada · ' : ''}${p.name} · ${t.recurrence ? 'Recorrente' : STATUS[t.status]}`, t.status === 'done'); })
       + group('Finanças', r.fin, 12, (f) => row('fin', f.id, f.line, icon(FIN[f.it.kind].ico, 16), f.title, f.sub));
   }
   function searchDialog() {
@@ -1809,17 +1922,37 @@
         form.querySelectorAll('.emoji-pick button').forEach((b) => b.classList.toggle('on', b === el));
         break;
       }
-      case 'delete-project': {
-        const form = el.closest('form');
-        const p = getProject(form.dataset.id);
-        if (p) {
-          deleteProject(p);
-          closeOverlay();
-          location.hash = '#/';
-          render();
-        }
+      case 'delete-project': if (getProject(id)) deleteProjectDialog(getProject(id)); break;
+      case 'confirm-delete-project': {
+        const p = getProject(id);
+        if (!p) break;
+        const was = isArchived(p);
+        deleteProject(p);
+        if (was) { render(); archivedDialog(); break; }
+        closeOverlay();
+        location.hash = '#/';
+        render();
         break;
       }
+      case 'archive-project': {
+        const p = getProject(id);
+        if (!p) break;
+        closeOverlay();
+        archiveProject(p);
+        location.hash = '#/';
+        render();
+        break;
+      }
+      case 'restore-project': {
+        const p = getProject(id);
+        if (!p) break;
+        const inDrawer = !!el.closest('.drawer');
+        restoreProject(p);
+        render();
+        if (inDrawer) { refreshDrawer(); const b = overlay.querySelector('[data-action="d-menu"]'); if (b) b.focus(); } else archivedDialog();
+        break;
+      }
+      case 'archived': if (S.sidebarOpen) { S.sidebarOpen = false; render(); } archivedDialog(); break;
       case 'seed': seedDemo(); break;
         case 'heat-day': S.heatDay = S.heatDay === el.dataset.value ? null : el.dataset.value; render(); break;
         case 'water-add': waterSet({ cups: ((waterRow(ymd(new Date())) || {}).cups || 0) + 1 }); render(); break;
@@ -2265,7 +2398,7 @@
       e.preventDefault();
       const btn = document.querySelector('[data-action="focus-quick"]');
       if (S.route.view === 'project') { const q = document.getElementById('quick'); if (q && q.getClientRects().length) q.focus(); else newTaskSheet(); }
-      else if (!S.projects.length) projectDialog(null);
+      else if (!liveProjects().length) projectDialog(null);
       else if (btn) btn.click();
     } else if (e.key === '/' && document.getElementById('search')) {
       e.preventDefault();

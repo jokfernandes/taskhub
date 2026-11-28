@@ -10,7 +10,8 @@ create table if not exists public.projects (
   task_counter integer not null default 0,
   created_at timestamptz not null default now(),
   color text not null default '',
-  milestones jsonb not null default '[]'::jsonb
+  milestones jsonb not null default '[]'::jsonb,
+  archived_at timestamptz
 );
 
 create table if not exists public.tasks (
